@@ -5,10 +5,10 @@ import QtQuick.Window
 
 Window {
     id: mainWindow
-    width: 1160
-    height: 760
-    minimumWidth: 960
-    minimumHeight: 640
+    width: 1180
+    height: 780
+    minimumWidth: 980
+    minimumHeight: 680
     visible: true
     title: "PRIME — Personal Local Assistant"
     color: "#050A12"
@@ -17,7 +17,11 @@ Window {
         id: settingsDialog
     }
 
-    // Subtle deep navy radial atmosphere
+    Shortcut {
+        sequence: primeBridge.pttShortcut
+        onActivated: primeBridge.togglePushToTalk()
+    }
+
     Rectangle {
         anchors.fill: parent
         gradient: Gradient {
@@ -47,7 +51,6 @@ Window {
                 anchors.rightMargin: 18
                 spacing: 14
 
-                // Minimal PRIME mark + title
                 RowLayout {
                     spacing: 10
                     Rectangle {
@@ -83,7 +86,6 @@ Window {
                     }
                 }
 
-                // State badge
                 Rectangle {
                     radius: 6
                     color: "#0F2238"
@@ -102,8 +104,10 @@ Window {
                             radius: 3.5
                             color: {
                                 if (primeBridge.assistantState === "listening") return "#22D3EE"
+                                if (primeBridge.assistantState === "transcribing") return "#38BDF8"
                                 if (primeBridge.assistantState === "thinking") return "#F59E0B"
                                 if (primeBridge.assistantState === "speaking") return "#F43F5E"
+                                if (primeBridge.assistantState === "error") return "#EF4444"
                                 return "#38BDF8"
                             }
                         }
@@ -117,9 +121,31 @@ Window {
                     }
                 }
 
+                // Mic monitoring badge (visible when recording or double-clap active)
+                Rectangle {
+                    visible: primeBridge.isRecording || primeBridge.doubleClapMonitoring
+                    radius: 6
+                    color: "#221018"
+                    border.color: "#F43F5E"
+                    border.width: 1
+                    implicitWidth: micLiveText.implicitWidth + 18
+                    implicitHeight: 28
+
+                    Text {
+                        id: micLiveText
+                        anchors.centerIn: parent
+                        text: primeBridge.isRecording
+                              ? ("MIC LIVE • " + primeBridge.recordingDurationText)
+                              : "MIC MONITORING: DOUBLE-CLAP"
+                        color: "#FDA4AF"
+                        font.pixelSize: 10
+                        font.weight: Font.DemiBold
+                        font.letterSpacing: 1.1
+                    }
+                }
+
                 Item { Layout.fillWidth: true }
 
-                // Clock
                 ColumnLayout {
                     spacing: 0
                     Layout.alignment: Qt.AlignVCenter
@@ -140,7 +166,6 @@ Window {
                     }
                 }
 
-                // Settings trigger
                 Button {
                     text: "Settings"
                     onClicked: settingsDialog.open()
@@ -170,20 +195,20 @@ Window {
             Layout.fillHeight: true
             spacing: 14
 
-            // -------- LEFT COLUMN: CENTRAL HUD + ACTIVATION + SYSTEM METRICS --------
+            // -------- LEFT COLUMN --------
             ColumnLayout {
                 Layout.fillWidth: false
-                Layout.preferredWidth: 410
-                Layout.minimumWidth: 370
-                Layout.maximumWidth: 430
+                Layout.preferredWidth: 420
+                Layout.minimumWidth: 380
+                Layout.maximumWidth: 440
                 Layout.fillHeight: true
-                spacing: 14
+                spacing: 12
 
                 // 2. CENTRAL HUD PANEL
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.minimumHeight: 280
+                    Layout.minimumHeight: 240
                     color: "#CC091220"
                     radius: 14
                     border.color: "#162B47"
@@ -191,7 +216,7 @@ Window {
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 14
+                        anchors.margins: 12
                         spacing: 8
 
                         JarvisHud {
@@ -199,6 +224,7 @@ Window {
                             Layout.fillHeight: true
                             stateName: primeBridge.assistantState
                             aiConnected: primeBridge.aiBackendConnected
+                            micLevel: primeBridge.micLevel
                         }
 
                         // Runtime status + Model Load/Unload bar
@@ -291,10 +317,10 @@ Window {
                     }
                 }
 
-                // 4. ACTIVATION CONTROLS
+                // 4. ACTIVATION & VOICE CONTROLS
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 150
+                    Layout.preferredHeight: 210
                     color: "#CC0B1526"
                     radius: 14
                     border.color: "#162B47"
@@ -302,79 +328,178 @@ Window {
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 14
-                        spacing: 10
-
-                        Text {
-                            text: "ACTIVATION CONTROLS"
-                            color: "#7E9CBE"
-                            font.pixelSize: 11
-                            font.weight: Font.DemiBold
-                            font.letterSpacing: 1.8
-                        }
+                        anchors.margins: 12
+                        spacing: 8
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: 10
+                            Text {
+                                text: "VOICE & ACTIVATION"
+                                color: "#7E9CBE"
+                                font.pixelSize: 11
+                                font.weight: Font.DemiBold
+                                font.letterSpacing: 1.8
+                                Layout.fillWidth: true
+                            }
+                            Text {
+                                text: "Mic: " + primeBridge.micPermissionText
+                                color: primeBridge.micPermissionText === "Granted" ? "#34D399" : "#F59E0B"
+                                font.pixelSize: 10
+                            }
+                        }
+
+                        // Hold-to-talk + Cancel + Stop TTS
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
 
                             Button {
                                 id: pttButton
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 42
-                                text: primeBridge.pushToTalkPressed
-                                      ? "Push-to-Talk: ACTIVE (Release/Click)"
-                                      : "Push-to-Talk (UI State)"
-                                onClicked: primeBridge.togglePushToTalk()
+                                Layout.preferredHeight: 38
+                                text: primeBridge.isRecording
+                                      ? ("Release to Transcribe (" + primeBridge.recordingDurationText + ")")
+                                      : (primeBridge.isTranscribing ? "Transcribing..." : "Hold to Talk (" + primeBridge.pttShortcut + ")")
+                                enabled: !primeBridge.isTranscribing
+                                onPressed: primeBridge.startPushToTalk()
+                                onReleased: primeBridge.releasePushToTalk()
                                 background: Rectangle {
-                                    color: primeBridge.pushToTalkPressed
+                                    color: primeBridge.isRecording
                                            ? "#0E4866"
                                            : (pttButton.hovered ? "#132742" : "#0E1C30")
                                     radius: 8
-                                    border.color: primeBridge.pushToTalkPressed ? "#22D3EE" : "#22436B"
+                                    border.color: primeBridge.isRecording ? "#22D3EE" : "#22436B"
                                     border.width: 1
                                 }
                                 contentItem: Text {
                                     text: pttButton.text
-                                    color: primeBridge.pushToTalkPressed ? "#E2F8FF" : "#CBE4FF"
-                                    font.pixelSize: 12
+                                    color: primeBridge.isRecording ? "#E2F8FF" : "#CBE4FF"
+                                    font.pixelSize: 11
                                     font.weight: Font.Medium
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                            }
+
+                            Button {
+                                visible: primeBridge.isRecording || primeBridge.isTranscribing
+                                Layout.preferredHeight: 38
+                                Layout.preferredWidth: 74
+                                text: "Cancel"
+                                onClicked: primeBridge.cancelVoiceInput()
+                                background: Rectangle {
+                                    color: "#7F1D1D"
+                                    radius: 8
+                                    border.color: "#F87171"
+                                    border.width: 1
+                                }
+                                contentItem: Text {
+                                    text: parent.text
+                                    color: "#FFFFFF"
+                                    font.pixelSize: 11
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                            }
+
+                            Button {
+                                visible: primeBridge.isSpeaking
+                                Layout.preferredHeight: 38
+                                Layout.preferredWidth: 84
+                                text: "Stop Voice"
+                                onClicked: primeBridge.stopSpeaking()
+                                background: Rectangle {
+                                    color: "#881337"
+                                    radius: 8
+                                    border.color: "#FB7185"
+                                    border.width: 1
+                                }
+                                contentItem: Text {
+                                    text: parent.text
+                                    color: "#FFFFFF"
+                                    font.pixelSize: 11
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
                                 }
                             }
                         }
 
-                        ColumnLayout {
+                        // Live Audio Level Bar
+                        Rectangle {
                             Layout.fillWidth: true
-                            spacing: 4
-                            RowLayout {
+                            height: 5
+                            radius: 2.5
+                            color: "#122238"
+                            Rectangle {
+                                width: parent.width * Math.min(1.0, primeBridge.micLevel)
+                                height: parent.height
+                                radius: 2.5
+                                color: "#22D3EE"
+                            }
+                        }
+
+                        // STT + Double-Clap Status & Controls
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            Text {
+                                text: "STT: " + primeBridge.sttModelSlug
+                                color: "#8FA9C9"
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
                                 Layout.fillWidth: true
-                                Text {
-                                    text: "Push-to-Talk:"
-                                    color: "#7E9CBE"
-                                    font.pixelSize: 11
+                            }
+                            Button {
+                                Layout.preferredHeight: 22
+                                text: primeBridge.sttLoaded ? "Unload STT" : "Load STT"
+                                enabled: primeBridge.sttLoaded || primeBridge.sttModelAvailable
+                                onClicked: primeBridge.sttLoaded ? primeBridge.unloadSttModel() : primeBridge.loadSttModel()
+                                background: Rectangle {
+                                    color: parent.enabled ? "#102540" : "#0A1424"
+                                    radius: 4
+                                    border.color: parent.enabled ? "#2B568A" : "#162A44"
+                                    border.width: 1
                                 }
-                                Text {
-                                    text: primeBridge.pushToTalkStatusText
-                                    color: "#A7C5E8"
-                                    font.pixelSize: 11
-                                    Layout.fillWidth: true
-                                    horizontalAlignment: Text.AlignRight
+                                contentItem: Text {
+                                    text: parent.text
+                                    color: parent.enabled ? "#CBE4FF" : "#4E6888"
+                                    font.pixelSize: 10
+                                    leftPadding: 6
+                                    rightPadding: 6
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
                                 }
                             }
-                            RowLayout {
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            Text {
+                                text: "Double-Clap: " + primeBridge.doubleClapStatusText
+                                color: primeBridge.doubleClapMonitoring ? "#FDA4AF" : (primeBridge.doubleClapEnabled ? "#A7C5E8" : "#64748B")
+                                font.pixelSize: 10
                                 Layout.fillWidth: true
-                                Text {
-                                    text: "Double-Clap:"
-                                    color: "#7E9CBE"
-                                    font.pixelSize: 11
+                            }
+                            Button {
+                                Layout.preferredHeight: 22
+                                text: primeBridge.doubleClapMonitoring ? "Stop Monitor" : "Monitor"
+                                enabled: primeBridge.doubleClapEnabled || primeBridge.doubleClapMonitoring
+                                onClicked: primeBridge.toggleDoubleClapMonitoring()
+                                background: Rectangle {
+                                    color: primeBridge.doubleClapMonitoring ? "#7F1D1D" : (parent.enabled ? "#102540" : "#0A1424")
+                                    radius: 4
+                                    border.color: primeBridge.doubleClapMonitoring ? "#F87171" : (parent.enabled ? "#2B568A" : "#162A44")
+                                    border.width: 1
                                 }
-                                Text {
-                                    text: primeBridge.doubleClapStatusText
-                                    color: primeBridge.doubleClapEnabled ? "#A7C5E8" : "#64748B"
-                                    font.pixelSize: 11
-                                    Layout.fillWidth: true
-                                    horizontalAlignment: Text.AlignRight
+                                contentItem: Text {
+                                    text: parent.text
+                                    color: parent.enabled ? "#E2F1FF" : "#4E6888"
+                                    font.pixelSize: 10
+                                    leftPadding: 6
+                                    rightPadding: 6
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
                                 }
                             }
                         }
@@ -384,7 +509,7 @@ Window {
                 // 5. SYSTEM INFORMATION
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 150
+                    Layout.preferredHeight: 138
                     color: "#CC0B1526"
                     radius: 14
                     border.color: "#162B47"
@@ -392,8 +517,8 @@ Window {
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 14
-                        spacing: 10
+                        anchors.margins: 12
+                        spacing: 8
 
                         RowLayout {
                             Layout.fillWidth: true
@@ -409,61 +534,52 @@ Window {
                                 text: primeBridge.memoryProfile.toUpperCase() + " • " + primeBridge.languageMode
                                 color: "#38BDF8"
                                 font.pixelSize: 10
-                                font.letterSpacing: 1.0
                             }
                         }
 
-                        // CPU row
                         ColumnLayout {
                             Layout.fillWidth: true
-                            spacing: 4
+                            spacing: 3
                             RowLayout {
                                 Layout.fillWidth: true
-                                Text { text: "CPU Load"; color: "#8FA9C9"; font.pixelSize: 12; Layout.fillWidth: true }
-                                Text { text: primeBridge.cpuText; color: "#E2F1FF"; font.pixelSize: 12; font.family: "Menlo" }
+                                Text { text: "CPU Load"; color: "#8FA9C9"; font.pixelSize: 11; Layout.fillWidth: true }
+                                Text { text: primeBridge.cpuText; color: "#E2F1FF"; font.pixelSize: 11; font.family: "Menlo" }
                             }
                             Rectangle {
-                                Layout.fillWidth: true; height: 5; radius: 2.5; color: "#122238"
-                                Rectangle {
-                                    width: parent.width * primeBridge.cpuRatio
-                                    height: parent.height
-                                    radius: 2.5
-                                    color: "#38BDF8"
-                                }
+                                Layout.fillWidth: true; height: 4; radius: 2; color: "#122238"
+                                Rectangle { width: parent.width * primeBridge.cpuRatio; height: parent.height; radius: 2; color: "#38BDF8" }
                             }
                         }
 
-                        // Memory row
                         ColumnLayout {
                             Layout.fillWidth: true
-                            spacing: 4
+                            spacing: 3
                             RowLayout {
                                 Layout.fillWidth: true
-                                Text { text: "Unified Memory"; color: "#8FA9C9"; font.pixelSize: 12; Layout.fillWidth: true }
-                                Text { text: primeBridge.memoryText; color: "#E2F1FF"; font.pixelSize: 12; font.family: "Menlo" }
+                                Text { text: "Unified Memory"; color: "#8FA9C9"; font.pixelSize: 11; Layout.fillWidth: true }
+                                Text { text: primeBridge.memoryText; color: "#E2F1FF"; font.pixelSize: 11; font.family: "Menlo" }
                             }
                             Rectangle {
-                                Layout.fillWidth: true; height: 5; radius: 2.5; color: "#122238"
+                                Layout.fillWidth: true; height: 4; radius: 2; color: "#122238"
                                 Rectangle {
                                     width: parent.width * primeBridge.memoryRatio
                                     height: parent.height
-                                    radius: 2.5
+                                    radius: 2
                                     color: primeBridge.memoryRatio > 0.85 ? "#F59E0B" : "#22D3EE"
                                 }
                             }
                         }
 
-                        // Battery row
                         RowLayout {
                             Layout.fillWidth: true
-                            Text { text: "Power / Battery"; color: "#8FA9C9"; font.pixelSize: 12; Layout.fillWidth: true }
-                            Text { text: primeBridge.batteryText; color: "#E2F1FF"; font.pixelSize: 12; font.family: "Menlo" }
+                            Text { text: "Power / Battery"; color: "#8FA9C9"; font.pixelSize: 11; Layout.fillWidth: true }
+                            Text { text: primeBridge.batteryText; color: "#E2F1FF"; font.pixelSize: 11; font.family: "Menlo" }
                         }
                     }
                 }
             }
 
-            // -------- RIGHT COLUMN: 3. CONVERSATION PANEL --------
+            // -------- RIGHT COLUMN: CONVERSATION PANEL --------
             Rectangle {
                 Layout.fillWidth: true
                 Layout.minimumWidth: 440
@@ -481,7 +597,7 @@ Window {
                     RowLayout {
                         Layout.fillWidth: true
                         Text {
-                            text: "CONVERSATION & COMMAND LOG"
+                            text: "CONVERSATION & VOICE LOG"
                             color: "#7E9CBE"
                             font.pixelSize: 11
                             font.weight: Font.DemiBold
@@ -510,7 +626,6 @@ Window {
                         }
                     }
 
-                    // Explicit offline/unavailable banner when AI engine is not loaded
                     Rectangle {
                         Layout.fillWidth: true
                         visible: !primeBridge.aiBackendConnected
@@ -533,7 +648,27 @@ Window {
                         }
                     }
 
-                    // Conversation history list
+                    // Transcription preview bar
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: primeBridge.transcriptionPreview.length > 0
+                        implicitHeight: previewText.implicitHeight + 14
+                        color: "#0C2136"
+                        radius: 8
+                        border.color: "#1D4D75"
+                        border.width: 1
+
+                        Text {
+                            id: previewText
+                            anchors.fill: parent
+                            anchors.margins: 7
+                            text: "VOICE PREVIEW: " + primeBridge.transcriptionPreview
+                            color: "#7DD3FC"
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
                     Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
@@ -597,7 +732,6 @@ Window {
                             }
                         }
 
-                        // Empty state when no messages submitted yet
                         Column {
                             anchors.centerIn: parent
                             spacing: 8
@@ -614,7 +748,7 @@ Window {
                             }
                             Text {
                                 width: parent.width
-                                text: "Type a message in Bangla or English below to test local session logging, or use the Push-to-Talk control to inspect UI state transitions."
+                                text: "Type a message in Bangla or English below, or hold Push-to-Talk to speak offline via Whisper & AVSpeech."
                                 color: "#607D9F"
                                 font.pixelSize: 12
                                 wrapMode: Text.WordWrap
@@ -623,7 +757,6 @@ Window {
                         }
                     }
 
-                    // Text Input + Send Button
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 10

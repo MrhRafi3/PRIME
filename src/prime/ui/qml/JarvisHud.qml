@@ -4,11 +4,14 @@ Item {
     id: hudRoot
     property string stateName: "idle"
     property bool aiConnected: false
+    property real micLevel: 0.0
 
     readonly property color accentColor: {
         if (stateName === "listening") return "#22D3EE"
+        if (stateName === "transcribing") return "#38BDF8"
         if (stateName === "thinking") return "#F59E0B"
         if (stateName === "speaking") return "#F43F5E"
+        if (stateName === "error") return "#EF4444"
         return "#38BDF8"
     }
     readonly property color secondaryColor: stateName === "thinking" ? "#D97706" : "#1D4ED8"
@@ -20,7 +23,7 @@ Item {
     NumberAnimation on outerAngle {
         from: 0
         to: 360
-        duration: hudRoot.stateName === "thinking" ? 5500 : 18000
+        duration: hudRoot.stateName === "thinking" || hudRoot.stateName === "transcribing" ? 5500 : 18000
         loops: Animation.Infinite
         running: hudRoot.visible
     }
@@ -28,7 +31,7 @@ Item {
     NumberAnimation on innerAngle {
         from: 360
         to: 0
-        duration: hudRoot.stateName === "listening" ? 7000 : 14000
+        duration: hudRoot.stateName === "listening" ? 6000 : 14000
         loops: Animation.Infinite
         running: hudRoot.visible
     }
@@ -38,14 +41,14 @@ Item {
         running: hudRoot.visible
         NumberAnimation {
             from: 0.96
-            to: hudRoot.stateName === "listening" ? 1.06 : 1.02
-            duration: hudRoot.stateName === "listening" ? 900 : 2200
+            to: hudRoot.stateName === "listening" || hudRoot.stateName === "speaking" ? 1.06 : 1.02
+            duration: hudRoot.stateName === "listening" || hudRoot.stateName === "speaking" ? 750 : 2200
             easing.type: Easing.InOutSine
         }
         NumberAnimation {
-            from: hudRoot.stateName === "listening" ? 1.06 : 1.02
+            from: hudRoot.stateName === "listening" || hudRoot.stateName === "speaking" ? 1.06 : 1.02
             to: 0.96
-            duration: hudRoot.stateName === "listening" ? 900 : 2200
+            duration: hudRoot.stateName === "listening" || hudRoot.stateName === "speaking" ? 750 : 2200
             easing.type: Easing.InOutSine
         }
     }
@@ -53,6 +56,7 @@ Item {
     onOuterAngleChanged: hudCanvas.requestPaint()
     onInnerAngleChanged: hudCanvas.requestPaint()
     onStateNameChanged: hudCanvas.requestPaint()
+    onMicLevelChanged: hudCanvas.requestPaint()
 
     Canvas {
         id: hudCanvas
@@ -69,7 +73,6 @@ Item {
 
             ctx.clearRect(0, 0, w, h)
 
-            // Soft radial core ambient backdrop (restrained)
             var grad = ctx.createRadialGradient(cx, cy, r * 0.05, cx, cy, r * 1.05)
             grad.addColorStop(0.0, Qt.rgba(hudRoot.accentColor.r, hudRoot.accentColor.g, hudRoot.accentColor.b, 0.22))
             grad.addColorStop(0.55, Qt.rgba(hudRoot.secondaryColor.r, hudRoot.secondaryColor.g, hudRoot.secondaryColor.b, 0.08))
@@ -79,14 +82,12 @@ Item {
             ctx.arc(cx, cy, r * 1.05, 0, Math.PI * 2)
             ctx.fill()
 
-            // Outer fine reference ring
             ctx.strokeStyle = Qt.rgba(hudRoot.accentColor.r, hudRoot.accentColor.g, hudRoot.accentColor.b, 0.22)
             ctx.lineWidth = 1.2
             ctx.beginPath()
             ctx.arc(cx, cy, r * 0.96, 0, Math.PI * 2)
             ctx.stroke()
 
-            // Rotating segmented outer arcs
             ctx.save()
             ctx.translate(cx, cy)
             ctx.rotate(hudRoot.outerAngle * Math.PI / 180)
@@ -100,7 +101,6 @@ Item {
             }
             ctx.restore()
 
-            // Counter-rotating dashed middle telemetry ring
             ctx.save()
             ctx.translate(cx, cy)
             ctx.rotate(hudRoot.innerAngle * Math.PI / 180)
@@ -115,15 +115,32 @@ Item {
             }
             ctx.restore()
 
-            // Inner harmonic core ring
-            var coreR = r * 0.56 * hudRoot.pulseScale
+            // Reactive audio waveform ticks around core when listening or speaking
+            if (hudRoot.stateName === "listening" || hudRoot.stateName === "speaking") {
+                var bars = 24
+                var baseR = r * 0.62
+                var amp = (hudRoot.stateName === "listening") ? Math.max(0.15, hudRoot.micLevel) : 0.45
+                ctx.strokeStyle = Qt.rgba(hudRoot.accentColor.r, hudRoot.accentColor.g, hudRoot.accentColor.b, 0.8)
+                ctx.lineWidth = 2.0
+                for (var b = 0; b < bars; b++) {
+                    var ba = b * (Math.PI * 2 / bars)
+                    var wave = 0.5 + 0.5 * Math.sin(ba * 3 + hudRoot.outerAngle * 0.12)
+                    var blen = r * (0.04 + 0.12 * amp * wave)
+                    ctx.beginPath()
+                    ctx.moveTo(cx + Math.cos(ba) * baseR, cy + Math.sin(ba) * baseR)
+                    ctx.lineTo(cx + Math.cos(ba) * (baseR + blen), cy + Math.sin(ba) * (baseR + blen))
+                    ctx.stroke()
+                }
+            }
+
+            var levelBoost = (hudRoot.stateName === "listening") ? (hudRoot.micLevel * 0.08) : 0.0
+            var coreR = r * (0.56 + levelBoost) * hudRoot.pulseScale
             ctx.strokeStyle = Qt.rgba(hudRoot.accentColor.r, hudRoot.accentColor.g, hudRoot.accentColor.b, 0.88)
             ctx.lineWidth = 2.0
             ctx.beginPath()
             ctx.arc(cx, cy, coreR, 0, Math.PI * 2)
             ctx.stroke()
 
-            // Subtle cardinal ticks
             ctx.strokeStyle = Qt.rgba(0.85, 0.95, 1.0, 0.35)
             ctx.lineWidth = 1.2
             for (var k = 0; k < 4; k++) {
@@ -153,8 +170,10 @@ Item {
             anchors.horizontalCenter: parent.horizontalCenter
             text: {
                 if (hudRoot.stateName === "listening") return "LISTENING"
-                if (hudRoot.stateName === "thinking") return "PROCESSING"
+                if (hudRoot.stateName === "transcribing") return "TRANSCRIBING"
+                if (hudRoot.stateName === "thinking") return "THINKING"
                 if (hudRoot.stateName === "speaking") return "SPEAKING"
+                if (hudRoot.stateName === "error") return "ERROR"
                 return "STANDBY • IDLE"
             }
             color: hudRoot.accentColor

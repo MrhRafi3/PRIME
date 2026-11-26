@@ -1,4 +1,4 @@
-"""Qt signals/slots view-model bridge connecting PRIME core and MLX runtime to QML."""
+"""Qt signals/slots view-model bridge connecting PRIME core, MLX, and Voice to QML."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from prime.config.settings import LanguageMode, MemoryProfile
 from prime.core.app import PrimeApp
 from prime.core.events import AssistantState, PrimeEvent
 from prime.intelligence.runtime.manager import RuntimeState
+from prime.security.tiers import PermissionState
 from prime.system.base import SystemMetrics
 
 _INVALID_INDEX = QModelIndex()
@@ -92,12 +93,13 @@ class MessageListModel(QAbstractListModel):
         idx = self.index(row, 0)
         self.dataChanged.emit(idx, idx, [self.TextRole])
 
-    def finalize_streaming(self, fallback_notice: str = "") -> None:
+    def finalize_streaming(self, fallback_notice: str = "") -> str:
         if self._streaming_row is None:
-            return
+            return ""
         row = self._streaming_row
         self._streaming_row = None
-        if not self._items[row]["text"].strip():
+        final_text = self._items[row]["text"].strip()
+        if not final_text:
             if fallback_notice:
                 self._items[row]["role"] = "PRIME System"
                 self._items[row]["text"] = fallback_notice
@@ -108,6 +110,7 @@ class MessageListModel(QAbstractListModel):
                 self.beginRemoveRows(QModelIndex(), row, row)
                 self._items.pop(row)
                 self.endRemoveRows()
+        return final_text
 
     def clear(self) -> None:
         self._streaming_row = None
@@ -171,6 +174,33 @@ class InferenceWorker(QObject):
         self.generationFinished.emit(result)
 
 
+class VoiceWorker(QObject):
+    """Dedicated background worker running offline Whisper STT off the Qt UI thread."""
+
+    transcriptionFinished = Signal(str, str)
+    sttLoadFinished = Signal(bool, str)
+
+    def __init__(self, app: PrimeApp) -> None:
+        super().__init__()
+        self._app = app
+
+    @Slot(str)
+    def load_stt(self, slug: str) -> None:
+        try:
+            self._app.load_stt_model(slug or None)
+            self.sttLoadFinished.emit(True, "")
+        except Exception as exc:
+            self.sttLoadFinished.emit(False, str(exc))
+
+    @Slot()
+    def stop_and_transcribe(self) -> None:
+        try:
+            result = self._app.stop_and_transcribe_voice()
+            self.transcriptionFinished.emit(result.text, "")
+        except Exception as exc:
+            self.transcriptionFinished.emit("", str(exc))
+
+
 class PrimeUIBridge(QObject):
     """Thread-safe QML bridge driving the PRIME JARVIS desktop interface."""
 
@@ -180,9 +210,14 @@ class PrimeUIBridge(QObject):
     activationChanged = Signal()
     settingsChanged = Signal()
     runtimeChanged = Signal()
+    voiceChanged = Signal()
+    audioLevelChanged = Signal()
+    doubleClapTriggered = Signal()
     requestMetricsRefresh = Signal()
     requestModelLoad = Signal(str)
     requestGeneration = Signal(str)
+    requestTranscribe = Signal()
+    requestSttLoad = Signal(str)
 
     def __init__(
         self,
@@ -202,16 +237,28 @@ class PrimeUIBridge(QObject):
         self._cpu_ratio = 0.0
         self._memory_ratio = 0.0
         self._generation_pending = False
+        self._mic_level = 0.0
+        self._recording_elapsed_s = 0.0
+        self._transcription_preview = ""
+        self._voice_error = ""
+
+        self._app.voice.set_level_callback(self._on_audio_level_from_thread)
+        self._app.voice.set_double_clap_callback(self._on_double_clap_from_thread)
+        self.doubleClapTriggered.connect(self._handle_double_clap_on_ui)
 
         self._app.events.subscribe("assistant.state_changed", self._on_backend_state_changed)
         self._app.events.subscribe("activation.changed", self._on_backend_activation_changed)
         self._app.events.subscribe("config.updated", self._on_backend_config_changed)
         self._app.events.subscribe("ai.runtime_changed", self._on_runtime_changed)
+        self._app.events.subscribe("voice.status_changed", self._on_voice_event)
+        self._app.events.subscribe("voice.permission_changed", self._on_voice_event)
 
         self._metrics_thread: QThread | None = None
         self._metrics_worker: MetricsWorker | None = None
         self._inference_thread: QThread | None = None
         self._inference_worker: InferenceWorker | None = None
+        self._voice_thread: QThread | None = None
+        self._voice_worker: VoiceWorker | None = None
         self._clock_timer: QTimer | None = None
         self._metrics_timer: QTimer | None = None
 
@@ -246,11 +293,25 @@ class PrimeUIBridge(QObject):
         self._inference_worker.modelLoadFinished.connect(self._on_model_load_finished)
         self._inference_thread.start()
 
+        self._voice_thread = QThread(self)
+        self._voice_worker = VoiceWorker(self._app)
+        self._voice_worker.moveToThread(self._voice_thread)
+        self.requestTranscribe.connect(self._voice_worker.stop_and_transcribe)
+        self.requestSttLoad.connect(self._voice_worker.load_stt)
+        self._voice_worker.transcriptionFinished.connect(self._on_transcription_finished)
+        self._voice_worker.sttLoadFinished.connect(self._on_stt_load_finished)
+        self._voice_thread.start()
+
     def shutdown(self) -> None:
         if self._clock_timer is not None:
             self._clock_timer.stop()
         if self._metrics_timer is not None:
             self._metrics_timer.stop()
+        if self._voice_thread is not None:
+            self._app.cancel_voice_recording()
+            self._voice_thread.quit()
+            self._voice_thread.wait(2000)
+            self._voice_thread = None
         if self._inference_thread is not None:
             self._app.cancel_generation()
             self._inference_thread.quit()
@@ -264,21 +325,44 @@ class PrimeUIBridge(QObject):
         self._app.events.unsubscribe("activation.changed", self._on_backend_activation_changed)
         self._app.events.unsubscribe("config.updated", self._on_backend_config_changed)
         self._app.events.unsubscribe("ai.runtime_changed", self._on_runtime_changed)
+        self._app.events.unsubscribe("voice.status_changed", self._on_voice_event)
+        self._app.events.unsubscribe("voice.permission_changed", self._on_voice_event)
 
     # ---- Backend Event Callbacks ----
     def _on_backend_state_changed(self, _event: PrimeEvent) -> None:
         self.stateChanged.emit()
+        self.voiceChanged.emit()
 
     def _on_backend_activation_changed(self, _event: PrimeEvent) -> None:
         self.activationChanged.emit()
+        self.voiceChanged.emit()
 
     def _on_backend_config_changed(self, _event: PrimeEvent) -> None:
         self.settingsChanged.emit()
         self.activationChanged.emit()
         self.runtimeChanged.emit()
+        self.voiceChanged.emit()
 
     def _on_runtime_changed(self, _event: PrimeEvent) -> None:
         self.runtimeChanged.emit()
+
+    def _on_voice_event(self, _event: PrimeEvent) -> None:
+        self.voiceChanged.emit()
+
+    def _on_audio_level_from_thread(self, level: float, elapsed_s: float) -> None:
+        self._mic_level = level
+        self._recording_elapsed_s = elapsed_s
+        self.audioLevelChanged.emit()
+
+    def _on_double_clap_from_thread(self) -> None:
+        self.doubleClapTriggered.emit()
+
+    @Slot()
+    def _handle_double_clap_on_ui(self) -> None:
+        self._transcription_preview = "Double-clap confirmed — starting listening..."
+        self.voiceChanged.emit()
+        if not self._app.get_voice_snapshot().recording:
+            self.startPushToTalk()
 
     @Slot(str)
     def _on_token_delta(self, delta: str) -> None:
@@ -287,17 +371,55 @@ class PrimeUIBridge(QObject):
     @Slot(object)
     def _on_generation_finished(self, result: Any) -> None:
         self._generation_pending = False
-        if result.backend_connected:
-            self._messages.finalize_streaming(result.system_notice)
-        else:
-            self._messages.finalize_streaming(result.system_notice)
+        reply_text = self._messages.finalize_streaming(result.system_notice)
         self.runtimeChanged.emit()
+        if (
+            result.backend_connected
+            and not result.cancelled
+            and reply_text
+            and self._app.config.voice.tts_enabled
+        ):
+            self._app.speak_reply(reply_text)
+            self.voiceChanged.emit()
 
     @Slot(bool, str)
     def _on_model_load_finished(self, ok: bool, err: str) -> None:
         if not ok and err:
             self._messages.append_message("PRIME System", err, kind="notice")
         self.runtimeChanged.emit()
+
+    @Slot(bool, str)
+    def _on_stt_load_finished(self, ok: bool, err: str) -> None:
+        if not ok and err:
+            self._voice_error = err
+            self._messages.append_message("PRIME Voice", err, kind="notice")
+        else:
+            self._voice_error = ""
+        self.voiceChanged.emit()
+
+    @Slot(str, str)
+    def _on_transcription_finished(self, transcript: str, err: str) -> None:
+        self._mic_level = 0.0
+        self._recording_elapsed_s = 0.0
+        self.audioLevelChanged.emit()
+
+        if err:
+            self._voice_error = err
+            self._transcription_preview = ""
+            self._messages.append_message("PRIME Voice", err, kind="notice")
+            self.voiceChanged.emit()
+            return
+
+        cleaned = transcript.strip()
+        if not cleaned:
+            self._transcription_preview = "No speech detected (silence or cancelled)."
+            self.voiceChanged.emit()
+            return
+
+        self._voice_error = ""
+        self._transcription_preview = cleaned
+        self.voiceChanged.emit()
+        self.sendMessage(cleaned)
 
     def _tick_clock(self) -> None:
         now = datetime.now()
@@ -360,14 +482,19 @@ class PrimeUIBridge(QObject):
 
     @Property(str, notify=stateChanged)
     def assistantState(self) -> str:
+        if self._voice_error and self._app.state == AssistantState.IDLE:
+            return "error"
         return self._app.state.value
 
     @Property(str, notify=stateChanged)
     def assistantStateLabel(self) -> str:
+        if self._voice_error and self._app.state == AssistantState.IDLE:
+            return "ERROR"
         labels = {
             AssistantState.IDLE: "IDLE",
             AssistantState.LISTENING: "LISTENING",
-            AssistantState.THINKING: "PROCESSING",
+            AssistantState.TRANSCRIBING: "TRANSCRIBING",
+            AssistantState.THINKING: "THINKING",
             AssistantState.SPEAKING: "SPEAKING",
             AssistantState.STARTING: "STARTING",
             AssistantState.SHUTTING_DOWN: "SHUTTING DOWN",
@@ -431,7 +558,7 @@ class PrimeUIBridge(QObject):
 
     @Property(str, constant=True)
     def localPrivacyText(self) -> str:
-        return "100% LOCAL ONLY • NO CLOUD AI"
+        return "100% LOCAL ONLY • NO CLOUD AI OR VOICE"
 
     @Property(str, notify=clockChanged)
     def currentTimeText(self) -> str:
@@ -467,23 +594,106 @@ class PrimeUIBridge(QObject):
 
     @Property(str, notify=activationChanged)
     def pushToTalkStatusText(self) -> str:
-        snap = self._app.get_activation_snapshot()
-        if snap.push_to_talk_pressed:
-            return "Active (UI Only — Mic Not Accessed)"
-        if not self._app.config.activation.push_to_talk_enabled:
-            return "Disabled"
-        return "Configured • Audio Deferred (Phase 05)"
+        vsnap = self._app.get_voice_snapshot()
+        if vsnap.recording:
+            return f"Recording ({self._recording_elapsed_s:.1f}s)"
+        if vsnap.transcribing:
+            return "Transcribing locally..."
+        if vsnap.stt_model_available:
+            return f"Ready ({self._app.config.activation.ptt_shortcut})"
+        return "STT Model Missing"
+
+    @Property(str, notify=settingsChanged)
+    def pttShortcut(self) -> str:
+        return self._app.config.activation.ptt_shortcut
 
     @Property(bool, notify=activationChanged)
     def doubleClapEnabled(self) -> bool:
         return self._app.get_activation_snapshot().double_clap_enabled
 
-    @Property(str, notify=activationChanged)
+    @Property(bool, notify=voiceChanged)
+    def doubleClapMonitoring(self) -> bool:
+        return self._app.get_voice_snapshot().double_clap_monitoring
+
+    @Property(str, notify=voiceChanged)
     def doubleClapStatusText(self) -> str:
-        snap = self._app.get_activation_snapshot()
-        if snap.double_clap_enabled:
-            return "Configured • Audio Inactive (Phase 05)"
-        return "Disabled"
+        vsnap = self._app.get_voice_snapshot()
+        if vsnap.double_clap_monitoring:
+            return "MONITORING ACTIVE (Mic Live)"
+        if vsnap.double_clap_enabled:
+            return "Opted-In (Monitoring Paused)"
+        return "Disabled (Default)"
+
+    @Property(float, notify=audioLevelChanged)
+    def micLevel(self) -> float:
+        return self._mic_level
+
+    @Property(str, notify=audioLevelChanged)
+    def recordingDurationText(self) -> str:
+        return f"{self._recording_elapsed_s:.1f}s"
+
+    @Property(bool, notify=voiceChanged)
+    def isRecording(self) -> bool:
+        return self._app.get_voice_snapshot().recording
+
+    @Property(bool, notify=voiceChanged)
+    def isTranscribing(self) -> bool:
+        return self._app.get_voice_snapshot().transcribing or (
+            self._app.state == AssistantState.TRANSCRIBING
+        )
+
+    @Property(bool, notify=voiceChanged)
+    def isSpeaking(self) -> bool:
+        return self._app.get_voice_snapshot().speaking or (
+            self._app.state == AssistantState.SPEAKING
+        )
+
+    @Property(str, notify=voiceChanged)
+    def micPermissionText(self) -> str:
+        perm = self._app.get_voice_snapshot().mic_permission
+        if perm == PermissionState.GRANTED:
+            return "Granted"
+        if perm == PermissionState.DENIED:
+            return "Denied"
+        if perm == PermissionState.NOT_DETERMINED:
+            return "Not Requested"
+        return "Unavailable"
+
+    @Property(bool, notify=voiceChanged)
+    def sttLoaded(self) -> bool:
+        return self._app.get_voice_snapshot().stt_loaded
+
+    @Property(bool, notify=voiceChanged)
+    def sttModelAvailable(self) -> bool:
+        return self._app.get_voice_snapshot().stt_model_available
+
+    @Property(str, notify=settingsChanged)
+    def sttModelSlug(self) -> str:
+        return self._app.config.voice.stt_model_slug
+
+    @Property(bool, notify=settingsChanged)
+    def ttsEnabled(self) -> bool:
+        return self._app.config.voice.tts_enabled
+
+    @Property(str, notify=settingsChanged)
+    def ttsEnglishVoice(self) -> str:
+        return self._app.config.voice.tts_english_voice
+
+    @Property(float, notify=settingsChanged)
+    def ttsRate(self) -> float:
+        return self._app.config.voice.tts_rate
+
+    @Property(float, notify=settingsChanged)
+    def ttsVolume(self) -> float:
+        return self._app.config.voice.tts_volume
+
+    @Property(str, notify=voiceChanged)
+    def transcriptionPreview(self) -> str:
+        return self._transcription_preview
+
+    @Property(str, notify=voiceChanged)
+    def voiceErrorText(self) -> str:
+        return self._voice_error
 
     @Property(str, notify=settingsChanged)
     def languageMode(self) -> str:
@@ -518,6 +728,80 @@ class PrimeUIBridge(QObject):
             self._messages.append_message("PRIME", result.assistant_text, kind="assistant")
 
     @Slot()
+    def startPushToTalk(self) -> None:
+        self._voice_error = ""
+        try:
+            self._app.start_voice_recording(allow_prompt=True)
+            self._transcription_preview = "Listening locally (zero audio saved to disk)..."
+        except Exception as exc:
+            self._voice_error = str(exc)
+            self._messages.append_message("PRIME Voice", str(exc), kind="notice")
+        self.voiceChanged.emit()
+
+    @Slot()
+    def releasePushToTalk(self) -> None:
+        if not self._app.get_voice_snapshot().recording:
+            return
+        self._transcription_preview = "Transcribing offline with Whisper..."
+        self.voiceChanged.emit()
+        if self._voice_thread is not None and self._voice_thread.isRunning():
+            self.requestTranscribe.emit()
+            return
+        try:
+            res = self._app.stop_and_transcribe_voice()
+            self._on_transcription_finished(res.text, "")
+        except Exception as exc:
+            self._on_transcription_finished("", str(exc))
+
+    @Slot()
+    def cancelVoiceInput(self) -> None:
+        self._app.cancel_voice_recording()
+        self._mic_level = 0.0
+        self._recording_elapsed_s = 0.0
+        self._transcription_preview = "Voice input cancelled."
+        self.audioLevelChanged.emit()
+        self.voiceChanged.emit()
+
+    @Slot()
+    def stopSpeaking(self) -> None:
+        self._app.stop_speaking()
+        self.voiceChanged.emit()
+
+    @Slot()
+    def loadSttModel(self) -> None:
+        slug = self._app.config.voice.stt_model_slug
+        if self._voice_thread is not None and self._voice_thread.isRunning():
+            self.requestSttLoad.emit(slug)
+            return
+        try:
+            self._app.load_stt_model(slug)
+        except Exception as exc:
+            self._voice_error = str(exc)
+            self._messages.append_message("PRIME Voice", str(exc), kind="notice")
+        self.voiceChanged.emit()
+
+    @Slot()
+    def unloadSttModel(self) -> None:
+        self._app.unload_stt_model()
+        self.voiceChanged.emit()
+
+    @Slot()
+    def toggleDoubleClapMonitoring(self) -> None:
+        self._voice_error = ""
+        current = self._app.get_voice_snapshot().double_clap_monitoring
+        try:
+            self._app.set_double_clap_monitoring(not current, allow_prompt=True)
+        except Exception as exc:
+            self._voice_error = str(exc)
+            self._messages.append_message("PRIME Voice", str(exc), kind="notice")
+        self.voiceChanged.emit()
+
+    @Slot()
+    def requestMicrophonePermission(self) -> None:
+        self._app.request_microphone_access()
+        self.voiceChanged.emit()
+
+    @Slot()
     def loadModel(self) -> None:
         slug = self._app.config.ai.selected_model_slug
         if self._inference_thread is not None and self._inference_thread.isRunning():
@@ -545,8 +829,10 @@ class PrimeUIBridge(QObject):
 
     @Slot()
     def togglePushToTalk(self) -> None:
-        current = self._app.get_activation_snapshot().push_to_talk_pressed
-        self._app.set_push_to_talk(not current)
+        if self._app.get_voice_snapshot().recording:
+            self.releasePushToTalk()
+        else:
+            self.startPushToTalk()
 
     @Slot(bool)
     def setDoubleClapEnabled(self, enabled: bool) -> None:
@@ -576,6 +862,32 @@ class PrimeUIBridge(QObject):
             memory_profile=MemoryProfile(memory_profile),
             double_clap_enabled=double_clap_enabled,
             selected_model_slug=model_slug,
+            persist=True,
+        )
+
+    @Slot(str, str, bool, str, str, bool, str, float, float)
+    def saveAllPreferences(
+        self,
+        language_mode: str,
+        memory_profile: str,
+        double_clap_enabled: bool,
+        model_slug: str,
+        stt_model_slug: str,
+        tts_enabled: bool,
+        tts_english_voice: str,
+        tts_rate: float,
+        tts_volume: float,
+    ) -> None:
+        self._app.update_settings(
+            language_mode=LanguageMode(language_mode),
+            memory_profile=MemoryProfile(memory_profile),
+            double_clap_enabled=double_clap_enabled,
+            selected_model_slug=model_slug,
+            stt_model_slug=stt_model_slug,
+            tts_enabled=tts_enabled,
+            tts_english_voice=tts_english_voice,
+            tts_rate=tts_rate,
+            tts_volume=tts_volume,
             persist=True,
         )
 

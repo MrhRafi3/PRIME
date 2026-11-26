@@ -58,7 +58,7 @@ def test_qml_main_loads_and_bridges_state(tmp_path: Path) -> None:
         assert bridge.appName == "PRIME"
         assert bridge.aiBackendConnected is False
         assert bridge.assistantState == AssistantState.IDLE.value
-        assert bridge.localPrivacyText == "100% LOCAL ONLY • NO CLOUD AI"
+        assert bridge.localPrivacyText == "100% LOCAL ONLY • NO CLOUD AI OR VOICE"
     finally:
         for obj in engine.rootObjects():
             obj.close()
@@ -84,8 +84,8 @@ def test_ui_bridge_activation_unavailable_ai_metrics_and_persistence(tmp_path: P
     bridge = PrimeUIBridge(prime_app, start_timers=False)
 
     try:
-        # 1. Push-to-talk transitions cleanly without hardware recording
-        bridge.togglePushToTalk()
+        # 1. Push-to-talk transitions cleanly without hardware recording or mic prompt
+        bridge.setPushToTalkPressed(True)
         assert bridge.pushToTalkPressed is True
         assert bridge.assistantState == AssistantState.LISTENING.value
         assert prime_app.get_activation_snapshot().microphone_permission_requested is False

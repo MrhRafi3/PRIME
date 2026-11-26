@@ -48,7 +48,16 @@ def test_platform_factory_selection_and_windows_boundary(tmp_path: Path) -> None
 
 
 @pytest.mark.unit
-def test_macos_controller_does_not_prompt_hardware_tcc(tmp_path: Path) -> None:
+def test_macos_controller_does_not_prompt_hardware_tcc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import prime.voice.permissions as voice_perms
+
+    def _fail_prompt(*_args, **_kwargs) -> None:
+        raise AssertionError("check_permission must never invoke TCC microphone prompt")
+
+    monkeypatch.setattr(voice_perms, "request_microphone_permission", _fail_prompt)
+
     cfg = load_config(
         env={"PRIME_DATA_DIR": str(tmp_path / "d"), "PRIME_LOG_DIR": str(tmp_path / "l")}
     )
@@ -56,7 +65,12 @@ def test_macos_controller_does_not_prompt_hardware_tcc(tmp_path: Path) -> None:
     mac = MacOSSystemController(cfg, sec)
 
     assert mac.check_permission(PermissionScope.SYSTEM_READ) == PermissionState.GRANTED
-    assert mac.check_permission(PermissionScope.MICROPHONE) == PermissionState.NOT_DETERMINED
+    assert mac.check_permission(PermissionScope.MICROPHONE) in {
+        PermissionState.NOT_DETERMINED,
+        PermissionState.GRANTED,
+        PermissionState.DENIED,
+        PermissionState.UNAVAILABLE,
+    }
     assert mac.check_permission(PermissionScope.CAMERA) == PermissionState.NOT_DETERMINED
     assert mac.check_permission(PermissionScope.SCREEN_RECORDING) == PermissionState.NOT_DETERMINED
 

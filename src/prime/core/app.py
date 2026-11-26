@@ -13,6 +13,7 @@ from prime.config.settings import (
     LanguageMode,
     MemoryProfile,
     PrimeConfig,
+    VoiceConfig,
     load_config,
     save_config_toml,
 )
@@ -32,10 +33,12 @@ from prime.intelligence.runtime.manager import (
 from prime.logging.logger import configure_logging, log_event
 from prime.plugins.contracts import PluginRegistry
 from prime.security.manager import SecurityManager
-from prime.security.tiers import ConfirmationHandler
+from prime.security.tiers import ConfirmationHandler, PermissionState
 from prime.system.base import PlatformKind, SystemController
 from prime.system.factory import create_system_controller
-from prime.voice.contracts import ActivationSnapshot, ActivationStatus
+from prime.voice.contracts import ActivationSnapshot, STTResult
+from prime.voice.service import VoiceCoordinator, VoiceStatusSnapshot
+from prime.voice.stt.registry import STTModelRegistry
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +80,7 @@ class PrimeApp:
         confirmation_handler: ConfirmationHandler | None = None,
         llm_provider: LLMProvider | None = None,
         model_registry: ModelRegistry | None = None,
+        voice_coordinator: VoiceCoordinator | None = None,
         console_logging: bool = False,
         platform_override: str | None = None,
     ) -> None:
@@ -130,6 +134,16 @@ class PrimeApp:
         self._active_conversation_id: int | None = None
         self._push_to_talk_pressed = False
         self._schema_version = 0
+        self._stt_registry = STTModelRegistry(config.storage.stt_models_dir)
+        self.voice = voice_coordinator or VoiceCoordinator(
+            config.voice,
+            self._stt_registry,
+            double_clap_enabled=config.activation.double_clap_enabled,
+            clap_threshold=config.activation.clap_threshold,
+            clap_min_interval_s=config.activation.clap_min_interval_s,
+            clap_max_interval_s=config.activation.clap_max_interval_s,
+            logger=self.logger.getChild("voice"),
+        )
 
     @property
     def ai_backend_connected(self) -> bool:
@@ -157,27 +171,101 @@ class PrimeApp:
     def cancel_generation(self) -> RuntimeSnapshot:
         return self.runtime.cancel_generation()
 
-    def get_activation_snapshot(self) -> ActivationSnapshot:
-        ptt_status = (
-            ActivationStatus.ACTIVE
-            if self._push_to_talk_pressed
-            else (
-                ActivationStatus.CONFIGURED_UNAVAILABLE
-                if self.config.activation.push_to_talk_enabled
-                else ActivationStatus.DISABLED
+    def get_voice_snapshot(self) -> VoiceStatusSnapshot:
+        return self.voice.status()
+
+    def request_microphone_access(self) -> PermissionState:
+        state = self.voice.request_mic_permission()
+        self.events.publish("voice.permission_changed", {"state": state.value})
+        return state
+
+    def load_stt_model(self, slug: str | None = None) -> VoiceStatusSnapshot:
+        if self.state == AssistantState.STOPPED:
+            raise RuntimeError("PrimeApp must be bootstrapped before loading STT.")
+        self.voice.load_stt(slug)
+        snap = self.voice.status()
+        self.events.publish("voice.status_changed", {"stt_loaded": snap.stt_loaded})
+        return snap
+
+    def unload_stt_model(self) -> VoiceStatusSnapshot:
+        self.voice.unload_stt()
+        snap = self.voice.status()
+        self.events.publish("voice.status_changed", {"stt_loaded": snap.stt_loaded})
+        return snap
+
+    def start_voice_recording(self, *, allow_prompt: bool = True) -> VoiceStatusSnapshot:
+        if self.state == AssistantState.STOPPED:
+            raise RuntimeError("PrimeApp must be bootstrapped before recording.")
+        self.voice.start_recording(allow_prompt=allow_prompt)
+        self._push_to_talk_pressed = True
+        self._set_state(AssistantState.LISTENING)
+        snap = self.voice.status()
+        self.events.publish("activation.changed", {"push_to_talk_pressed": True})
+        return snap
+
+    def stop_and_transcribe_voice(self) -> STTResult:
+        if self.state == AssistantState.STOPPED:
+            raise RuntimeError("PrimeApp must be bootstrapped before transcribing.")
+        self._push_to_talk_pressed = False
+        self.events.publish("activation.changed", {"push_to_talk_pressed": False})
+        self._set_state(AssistantState.TRANSCRIBING)
+        try:
+            result = self.voice.stop_and_transcribe(language_mode=self.config.ai.language_mode)
+            self.events.publish(
+                "voice.transcribed",
+                {"has_text": bool(result.text), "duration_ms": result.duration_ms},
             )
+            return result
+        finally:
+            if self.state == AssistantState.TRANSCRIBING:
+                self._set_state(AssistantState.IDLE)
+
+    def cancel_voice_recording(self) -> None:
+        self._push_to_talk_pressed = False
+        self.voice.cancel_voice_input()
+        self._set_state(AssistantState.IDLE)
+        self.events.publish("activation.changed", {"push_to_talk_pressed": False})
+
+    def set_double_clap_monitoring(self, enabled: bool, *, allow_prompt: bool = True) -> bool:
+        if self.state == AssistantState.STOPPED:
+            raise RuntimeError("PrimeApp must be bootstrapped before double-clap monitoring.")
+        active = self.voice.set_double_clap_monitoring(enabled, allow_prompt=allow_prompt)
+        self.events.publish("activation.changed", {"double_clap_monitoring": active})
+        return active
+
+    def speak_reply(
+        self,
+        text: str,
+        *,
+        on_finished: Callable[[], None] | None = None,
+    ) -> bool:
+        if self.state == AssistantState.STOPPED:
+            return False
+
+        def _done() -> None:
+            if self.state == AssistantState.SPEAKING:
+                self._set_state(AssistantState.IDLE)
+            if on_finished is not None:
+                on_finished()
+
+        started = self.voice.speak(
+            text,
+            language_mode=self.config.ai.language_mode,
+            on_finished=_done,
         )
-        clap_status = (
-            ActivationStatus.CONFIGURED_UNAVAILABLE
-            if self.config.activation.double_clap_enabled
-            else ActivationStatus.DISABLED
-        )
-        return ActivationSnapshot(
-            push_to_talk_pressed=self._push_to_talk_pressed,
-            push_to_talk_status=ptt_status,
-            double_clap_enabled=self.config.activation.double_clap_enabled,
-            double_clap_status=clap_status,
-            microphone_permission_requested=False,
+        if started:
+            self._set_state(AssistantState.SPEAKING)
+        return started
+
+    def stop_speaking(self) -> None:
+        self.voice.stop_speaking()
+        if self.state == AssistantState.SPEAKING:
+            self._set_state(AssistantState.IDLE)
+
+    def get_activation_snapshot(self) -> ActivationSnapshot:
+        return self.voice.activation_snapshot(
+            ptt_enabled=self.config.activation.push_to_talk_enabled,
+            ptt_pressed=self._push_to_talk_pressed,
         )
 
     def set_push_to_talk(self, pressed: bool) -> ActivationSnapshot:
@@ -307,6 +395,12 @@ class PrimeApp:
         language_mode: LanguageMode | None = None,
         memory_profile: MemoryProfile | None = None,
         selected_model_slug: str | None = None,
+        stt_model_slug: str | None = None,
+        tts_enabled: bool | None = None,
+        tts_english_voice: str | None = None,
+        tts_bangla_voice: str | None = None,
+        tts_rate: float | None = None,
+        tts_volume: float | None = None,
         persist: bool = True,
     ) -> PrimeConfig:
         """Update supported settings safely and optionally persist to config.toml."""
@@ -320,6 +414,7 @@ class PrimeApp:
                 clap_threshold=self.config.activation.clap_threshold,
                 clap_min_interval_s=self.config.activation.clap_min_interval_s,
                 clap_max_interval_s=self.config.activation.clap_max_interval_s,
+                ptt_shortcut=self.config.activation.ptt_shortcut,
             )
 
         new_ai = self.config.ai
@@ -353,7 +448,36 @@ class PrimeApp:
                 new_budget, new_ai.max_context_tokens, new_ai.max_generation_tokens
             )
 
-        self.config = replace(self.config, activation=new_activation, ai=new_ai)
+        new_voice = self.config.voice
+        if (
+            stt_model_slug is not None
+            or tts_enabled is not None
+            or tts_english_voice is not None
+            or tts_bangla_voice is not None
+            or tts_rate is not None
+            or tts_volume is not None
+        ):
+            target_stt = stt_model_slug or self.config.voice.stt_model_slug
+            self._stt_registry.get_spec(target_stt)
+            new_voice = VoiceConfig(
+                stt_model_slug=target_stt,
+                tts_enabled=(
+                    self.config.voice.tts_enabled if tts_enabled is None else bool(tts_enabled)
+                ),
+                tts_english_voice=tts_english_voice or self.config.voice.tts_english_voice,
+                tts_bangla_voice=tts_bangla_voice or self.config.voice.tts_bangla_voice,
+                tts_rate=self.config.voice.tts_rate if tts_rate is None else float(tts_rate),
+                tts_volume=(
+                    self.config.voice.tts_volume if tts_volume is None else float(tts_volume)
+                ),
+            )
+            if stt_model_slug and self.voice.stt_provider.is_loaded:
+                self.voice.unload_stt()
+
+        self.config = replace(self.config, activation=new_activation, ai=new_ai, voice=new_voice)
+        self.voice.update_config(
+            self.config.voice, double_clap_enabled=self.config.activation.double_clap_enabled
+        )
         self.context = ContextAssembler(self.memory, language_mode=self.config.ai.language_mode)
         if persist:
             save_config_toml(self.config)
@@ -418,6 +542,7 @@ class PrimeApp:
         if self.state == AssistantState.STOPPED:
             return
         self._set_state(AssistantState.SHUTTING_DOWN)
+        self.voice.shutdown()
         self.runtime.unload_model()
         self.plugins.unregister_all()
         self.memory.close()

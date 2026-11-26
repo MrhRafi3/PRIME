@@ -30,7 +30,7 @@ def test_default_config_identity_and_safety(tmp_path: Path) -> None:
     assert cfg.ai.memory_profile == MemoryProfile.BALANCED
     assert cfg.ai.language_mode == LanguageMode.BANGLA_ENGLISH
     assert cfg.activation.push_to_talk_enabled is True
-    assert cfg.activation.double_clap_enabled is True
+    assert cfg.activation.double_clap_enabled is False
     assert cfg.activation.wake_word_enabled is False
     assert cfg.activation.background_mic_enabled is False
     assert cfg.security.allow_arbitrary_shell is False

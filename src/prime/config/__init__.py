@@ -13,6 +13,7 @@ from prime.config.settings import (
     PrimeConfig,
     SecurityConfig,
     StorageConfig,
+    VoiceConfig,
     load_config,
     save_config_toml,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "PrimeConfig",
     "SecurityConfig",
     "StorageConfig",
+    "VoiceConfig",
     "load_config",
     "save_config_toml",
 ]

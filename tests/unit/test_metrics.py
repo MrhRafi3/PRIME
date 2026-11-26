@@ -86,5 +86,5 @@ def test_save_config_toml_roundtrip_and_permissions(tmp_path: Path) -> None:
     assert reloaded.identity.bundle_id == "com.mrhrafi3.prime"
     assert reloaded.ai.memory_profile == MemoryProfile.BALANCED
     assert reloaded.ai.language_mode == LanguageMode.BANGLA_ENGLISH
-    assert reloaded.activation.double_clap_enabled is True
+    assert reloaded.activation.double_clap_enabled is False
     assert reloaded.activation.wake_word_enabled is False

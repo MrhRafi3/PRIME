@@ -42,11 +42,14 @@ SOFTWARE.
 
 ## 3. Third-Party Packages
 
-### Runtime Dependencies (Phase 03 & Phase 04)
+### Runtime Dependencies (Phases 03, 04 & 05)
 - **PySide6-Essentials** (`6.10.3`) & **shiboken6** (`6.10.3`) — **GNU Lesser General Public License v3 (LGPLv3)** (`Copyright (C) The Qt Company Ltd.`). Used via dynamic linking; distributed bundles must preserve LGPLv3 notices and allow end-users to replace Qt shared libraries.
 - **mlx** (`0.32.5`), **mlx-lm** (`0.32.2`), **mlx-metal** (`0.32.5`) — **MIT License** (`Copyright (c) Apple Inc.`).
+- **pywhispercpp** (`1.5.1`) & bundled `whisper.cpp` Metal/CPU runtime — **MIT License** (`Copyright (c) 2023-2026 A.B. / Georgi Gerganov & whisper.cpp contributors`).
+- **sounddevice** (`0.5.6`) — **MIT License** (`Copyright (c) 2015-2025 Matthias Geier`), wrapping bundled **PortAudio** (`V19.7.0-devel`, **MIT-style permissive license**).
+- **pyobjc-framework-AVFoundation** (`13.1`, pulling `pyobjc-core`, `pyobjc-framework-Cocoa`, `pyobjc-framework-CoreAudio`, `pyobjc-framework-Quartz`) — **MIT License** (`Copyright (c) 2002-2026 Ronald Oussoren and contributors`), bridging Apple macOS `AVFoundation` (`AVCaptureDevice`) and `AVFAudio` (`AVSpeechSynthesizer`) system frameworks.
 - **huggingface-hub** (`2.4.0`), **transformers** (`5.24.1`), **tokenizers** (`0.23.3`), **safetensors** (`0.8.0`), **sentencepiece** (`0.2.3`) — **Apache License 2.0**.
-- **numpy** (`2.5.5`), **pydantic** (`2.14.4`), **jinja2** (`3.1.6`), **pyyaml** (`6.0.4`), **typer** (`0.29.2`), **rich** (`15.0.0`), **httpx2** / **anyio** / **click** — **MIT / BSD-3-Clause** permissive licenses.
+- **numpy** (`2.5.5`), **pydantic** (`2.14.4`), **jinja2** (`3.1.6`), **pyyaml** (`6.0.4`), **typer** (`0.29.2`), **rich** (`15.0.0`), **httpx** / **anyio** / **click** — **MIT / BSD-3-Clause** permissive licenses.
 
 ### Development & Verification Dependencies
 - **pytest** (`>=8.3.0,<9.0.0`) — MIT License (`Copyright (c) 2004 Holger Krekel and others`)

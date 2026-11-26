@@ -12,9 +12,10 @@ class VoicePipelineError(RuntimeError):
 
 
 class ActivationStatus(StrEnum):
-    """Availability status for activation triggers without hardware access."""
+    """Availability status for activation triggers."""
 
     CONFIGURED_UNAVAILABLE = "configured_unavailable"
+    READY = "ready"
     DISABLED = "disabled"
     ACTIVE = "active"
 

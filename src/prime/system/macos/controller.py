@@ -65,7 +65,7 @@ class MacOSSystemController(SystemController):
         return PlatformKind.MACOS
 
     def check_permission(self, scope: PermissionScope) -> PermissionState:
-        """Report readiness without triggering macOS TCC privacy prompts in Phase 02."""
+        """Report readiness without triggering macOS TCC privacy prompts."""
         if scope in {
             PermissionScope.SYSTEM_READ,
             PermissionScope.AUDIO_VOLUME,
@@ -74,7 +74,11 @@ class MacOSSystemController(SystemController):
             PermissionScope.URL_OPEN,
         }:
             return PermissionState.GRANTED
-        # Hardware/privacy TCC scopes remain unprompted until their features are built.
+        if scope == PermissionScope.MICROPHONE:
+            from prime.voice.permissions import check_microphone_permission
+
+            return check_microphone_permission()
+        # Camera, Screen Recording, and Automation remain unprompted until built.
         return PermissionState.NOT_DETERMINED
 
     def _run_allowlisted(self, args: Sequence[str], *, timeout: float = 5.0) -> str:

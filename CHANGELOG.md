@@ -2,6 +2,16 @@
 
 All notable changes to PRIME will be documented in this file.
 
+## [0.4.0-phase05] - 2026-11-26 (Phase 05 — Voice Intelligence)
+
+### Added
+- 100% local Speech-to-Text (`prime.voice.stt`): `STTModelRegistry` (SHA-256 checksum & sandbox validation for `ggml-small-q5_1.bin` and `ggml-large-v3-turbo-q5_0.bin`) and `WhisperCppSTTProvider` (`pywhispercpp 1.5.1`, in-memory 16 kHz PCM transcription, zero temp files, cancellation & explicit `unload()`).
+- 100% offline macOS Text-to-Speech (`prime.voice.tts`): `AVSpeechTTSProvider` (`pyobjc-framework-AVFoundation 13.1` / `AVFAudio.AVSpeechSynthesizer`) supporting English (`Daniel`, `Samantha`, etc.) and automatic Bangla script (`\u0980-\u09FF`) routing to local `Piya` (`bn-IN`), adjustable rate & volume, and immediate stop/barge-in cancellation.
+- Bounded in-memory microphone capture (`prime.voice.audio_capture.AudioCaptureSession` via `sounddevice 0.5.6`) with live normalized RMS meter, zero disk persistence, and immediate zero-fill buffer wiping.
+- Opt-in Double-Clap activation (`prime.voice.double_clap.DoubleClapDetector` & `DoubleClapMonitor`), **disabled by default** (`double_clap_enabled = false`), zero wake-word support, non-prompting macOS microphone TCC check (`prime.voice.permissions`), and immediate stream teardown when disabled.
+- Unified `VoiceCoordinator` wired into `PrimeApp`, background `VoiceWorker` `QThread` in `PrimeUIBridge`, and `Main.qml` / `SettingsDialog.qml` / `JarvisHud.qml` Phase 05 controls (`VOICE & ACTIVATION`, live mic meter, `TRANSCRIBING` HUD ring state, voice settings persistence).
+- Phase 05 offline unit & UI test suites (`tests/unit/test_voice.py`, `tests/ui/test_voice_ui.py`) and 6 verification reports (`phase-05-reports/`).
+
 ## [0.3.0-phase04] - 2026-11-26 (Phase 04 — Local AI Intelligence Engine)
 
 ### Added

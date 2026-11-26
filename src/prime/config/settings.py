@@ -116,6 +116,10 @@ class StorageConfig:
     def models_dir(self) -> Path:
         return self.models_dir_override or (self.data_dir / "models")
 
+    @property
+    def stt_models_dir(self) -> Path:
+        return self.models_dir / "stt"
+
 
 @dataclass(frozen=True, slots=True)
 class LoggingConfig:
@@ -139,12 +143,13 @@ class LoggingConfig:
 @dataclass(frozen=True, slots=True)
 class ActivationConfig:
     push_to_talk_enabled: bool = True
-    double_clap_enabled: bool = True
+    double_clap_enabled: bool = False
     wake_word_enabled: bool = False
     background_mic_enabled: bool = False
     clap_threshold: int = 2000
     clap_min_interval_s: float = 0.1
     clap_max_interval_s: float = 0.8
+    ptt_shortcut: str = "Ctrl+Space"
 
     def __post_init__(self) -> None:
         if self.wake_word_enabled:
@@ -197,6 +202,24 @@ class SecurityConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class VoiceConfig:
+    stt_model_slug: str = "whisper-small-q5_1"
+    tts_enabled: bool = True
+    tts_english_voice: str = "Daniel"
+    tts_bangla_voice: str = "Piya"
+    tts_rate: float = 0.5
+    tts_volume: float = 0.9
+
+    def __post_init__(self) -> None:
+        if not self.stt_model_slug.strip():
+            raise ConfigError("stt_model_slug cannot be empty.")
+        if self.tts_rate < 0.1 or self.tts_rate > 1.0:
+            raise ConfigError("tts_rate must be between 0.1 and 1.0.")
+        if self.tts_volume < 0.0 or self.tts_volume > 1.0:
+            raise ConfigError("tts_volume must be between 0.0 and 1.0.")
+
+
+@dataclass(frozen=True, slots=True)
 class PrimeConfig:
     environment: EnvironmentMode = EnvironmentMode.DEVELOPMENT
     identity: IdentityConfig = field(default_factory=IdentityConfig)
@@ -204,6 +227,7 @@ class PrimeConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     activation: ActivationConfig = field(default_factory=ActivationConfig)
     ai: HardwareAIConfig = field(default_factory=HardwareAIConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
 
     def to_safe_dict(self) -> dict[str, Any]:
@@ -235,6 +259,15 @@ class PrimeConfig:
                 "double_clap_enabled": self.activation.double_clap_enabled,
                 "wake_word_enabled": self.activation.wake_word_enabled,
                 "background_mic_enabled": self.activation.background_mic_enabled,
+                "ptt_shortcut": self.activation.ptt_shortcut,
+            },
+            "voice": {
+                "stt_model_slug": self.voice.stt_model_slug,
+                "tts_enabled": self.voice.tts_enabled,
+                "tts_english_voice": self.voice.tts_english_voice,
+                "tts_bangla_voice": self.voice.tts_bangla_voice,
+                "tts_rate": self.voice.tts_rate,
+                "tts_volume": self.voice.tts_volume,
             },
             "ai": {
                 "memory_profile": self.ai.memory_profile.value,
@@ -350,7 +383,7 @@ def load_config(
             act_sec.get("push_to_talk_enabled", True), "activation.push_to_talk_enabled"
         ),
         double_clap_enabled=_parse_bool(
-            act_sec.get("double_clap_enabled", True), "activation.double_clap_enabled"
+            act_sec.get("double_clap_enabled", False), "activation.double_clap_enabled"
         ),
         wake_word_enabled=_parse_bool(
             act_sec.get("wake_word_enabled", False), "activation.wake_word_enabled"
@@ -365,6 +398,21 @@ def load_config(
         clap_max_interval_s=_parse_float(
             act_sec.get("clap_max_interval_s", 0.8), "clap_max_interval_s", 0.05
         ),
+        ptt_shortcut=str(act_sec.get("ptt_shortcut", "Ctrl+Space")).strip() or "Ctrl+Space",
+    )
+
+    voice_sec = _merge_section(file_data, "voice")
+    voice_cfg = VoiceConfig(
+        stt_model_slug=str(
+            environ.get("PRIME_STT_MODEL_SLUG")
+            or voice_sec.get("stt_model_slug")
+            or "whisper-small-q5_1"
+        ).strip(),
+        tts_enabled=_parse_bool(voice_sec.get("tts_enabled", True), "voice.tts_enabled"),
+        tts_english_voice=str(voice_sec.get("tts_english_voice", "Daniel")).strip() or "Daniel",
+        tts_bangla_voice=str(voice_sec.get("tts_bangla_voice", "Piya")).strip() or "Piya",
+        tts_rate=_parse_float(voice_sec.get("tts_rate", 0.5), "voice.tts_rate", 0.1),
+        tts_volume=_parse_float(voice_sec.get("tts_volume", 0.9), "voice.tts_volume", 0.0),
     )
 
     ai_sec = _merge_section(file_data, "ai")
@@ -449,6 +497,7 @@ def load_config(
         logging=logging_cfg,
         activation=activation,
         ai=ai_cfg,
+        voice=voice_cfg,
         security=security,
     )
 
@@ -489,6 +538,15 @@ def save_config_toml(config: PrimeConfig, path: Path | None = None) -> Path:
         f"clap_threshold = {config.activation.clap_threshold}",
         f"clap_min_interval_s = {config.activation.clap_min_interval_s}",
         f"clap_max_interval_s = {config.activation.clap_max_interval_s}",
+        f"ptt_shortcut = {_toml_quote(config.activation.ptt_shortcut)}",
+        "",
+        "[voice]",
+        f"stt_model_slug = {_toml_quote(config.voice.stt_model_slug)}",
+        f"tts_enabled = {'true' if config.voice.tts_enabled else 'false'}",
+        f"tts_english_voice = {_toml_quote(config.voice.tts_english_voice)}",
+        f"tts_bangla_voice = {_toml_quote(config.voice.tts_bangla_voice)}",
+        f"tts_rate = {config.voice.tts_rate}",
+        f"tts_volume = {config.voice.tts_volume}",
         "",
         "[ai]",
         f"memory_profile = {_toml_quote(config.ai.memory_profile.value)}",

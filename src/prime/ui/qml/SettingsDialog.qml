@@ -7,9 +7,9 @@ Popup {
     modal: true
     focus: true
     anchors.centerIn: parent
-    width: 460
-    height: 490
-    padding: 24
+    width: 500
+    height: 610
+    padding: 22
 
     background: Rectangle {
         color: "#0A1424"
@@ -22,17 +22,27 @@ Popup {
     property string selectedProfile: primeBridge.memoryProfile
     property bool clapChecked: primeBridge.doubleClapEnabled
     property string selectedModel: primeBridge.selectedModelSlug
+    property string selectedStt: primeBridge.sttModelSlug
+    property bool ttsChecked: primeBridge.ttsEnabled
+    property string selectedEnglishVoice: primeBridge.ttsEnglishVoice
+    property real selectedTtsRate: primeBridge.ttsRate
+    property real selectedTtsVolume: primeBridge.ttsVolume
 
     onOpened: {
         selectedLang = primeBridge.languageMode
         selectedProfile = primeBridge.memoryProfile
         clapChecked = primeBridge.doubleClapEnabled
         selectedModel = primeBridge.selectedModelSlug
+        selectedStt = primeBridge.sttModelSlug
+        ttsChecked = primeBridge.ttsEnabled
+        selectedEnglishVoice = primeBridge.ttsEnglishVoice
+        selectedTtsRate = primeBridge.ttsRate
+        selectedTtsVolume = primeBridge.ttsVolume
     }
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 16
+        spacing: 12
 
         RowLayout {
             Layout.fillWidth: true
@@ -65,7 +75,7 @@ Popup {
 
         Rectangle { Layout.fillWidth: true; height: 1; color: "#15263E" }
 
-        // Activation Option: Double-Clap
+        // Double-Clap Opt-In
         RowLayout {
             Layout.fillWidth: true
             spacing: 12
@@ -73,13 +83,13 @@ Popup {
                 Layout.fillWidth: true
                 spacing: 2
                 Text {
-                    text: "Double-Clap Activation (Config)"
+                    text: "Double-Clap Activation (Opt-In)"
                     color: "#DCEBFF"
                     font.pixelSize: 13
                     font.weight: Font.Medium
                 }
                 Text {
-                    text: "Audio hardware is inactive in Phase 03. Wake-word is deferred."
+                    text: "Disabled by default. Local RMS transient analysis only; zero audio saved."
                     color: "#6B86A8"
                     font.pixelSize: 11
                     wrapMode: Text.WordWrap
@@ -122,7 +132,7 @@ Popup {
                         contentItem: Text {
                             text: parent.text
                             color: settingsDialog.selectedLang === modelData.value ? "#E2F1FF" : "#8FA9C9"
-                            font.pixelSize: 12
+                            font.pixelSize: 11
                             leftPadding: 8
                             rightPadding: 8
                             horizontalAlignment: Text.AlignHCenter
@@ -133,38 +143,39 @@ Popup {
             }
         }
 
-        // Hardware Memory Profile (M1 8GB)
+        // Offline STT Model Selection
         ColumnLayout {
             Layout.fillWidth: true
             spacing: 6
             Text {
-                text: "M1 8GB Memory Profile (For Future Local AI)"
+                text: "Offline Whisper STT Model"
                 color: "#DCEBFF"
                 font.pixelSize: 13
                 font.weight: Font.Medium
             }
             RowLayout {
+                Layout.fillWidth: true
                 spacing: 8
                 Repeater {
                     model: [
-                        { label: "Eco (1.5B)", value: "eco" },
-                        { label: "Balanced (3B-4B)", value: "balanced" },
-                        { label: "Heavy (7B Warn)", value: "heavy" }
+                        { label: "Small q5_1 (181 MB)", value: "whisper-small-q5_1" },
+                        { label: "Large-v3-Turbo q5_0 (547 MB)", value: "whisper-large-v3-turbo-q5_0" }
                     ]
                     delegate: Button {
                         required property var modelData
+                        Layout.fillWidth: true
                         text: modelData.label
-                        onClicked: settingsDialog.selectedProfile = modelData.value
+                        onClicked: settingsDialog.selectedStt = modelData.value
                         background: Rectangle {
-                            color: settingsDialog.selectedProfile === modelData.value ? "#0E3352" : "#0E1A2B"
+                            color: settingsDialog.selectedStt === modelData.value ? "#0E3352" : "#0E1A2B"
                             radius: 6
-                            border.color: settingsDialog.selectedProfile === modelData.value ? "#38BDF8" : "#1E3352"
+                            border.color: settingsDialog.selectedStt === modelData.value ? "#38BDF8" : "#1E3352"
                             border.width: 1
                         }
                         contentItem: Text {
                             text: parent.text
-                            color: settingsDialog.selectedProfile === modelData.value ? "#E2F1FF" : "#8FA9C9"
-                            font.pixelSize: 12
+                            color: settingsDialog.selectedStt === modelData.value ? "#E2F1FF" : "#8FA9C9"
+                            font.pixelSize: 11
                             leftPadding: 8
                             rightPadding: 8
                             horizontalAlignment: Text.AlignHCenter
@@ -175,27 +186,93 @@ Popup {
             }
         }
 
-        // Approved Local MLX Model Selection
+        // Offline TTS Controls
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 6
+            RowLayout {
+                Layout.fillWidth: true
+                Text {
+                    text: "Offline Voice Output (AVSpeechSynthesizer)"
+                    color: "#DCEBFF"
+                    font.pixelSize: 13
+                    font.weight: Font.Medium
+                    Layout.fillWidth: true
+                }
+                Switch {
+                    checked: settingsDialog.ttsChecked
+                    onToggled: settingsDialog.ttsChecked = checked
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Text { text: "English Voice:"; color: "#8FA9C9"; font.pixelSize: 11 }
+                Repeater {
+                    model: ["Daniel", "Samantha", "Rishi"]
+                    delegate: Button {
+                        required property string modelData
+                        text: modelData
+                        onClicked: settingsDialog.selectedEnglishVoice = modelData
+                        background: Rectangle {
+                            color: settingsDialog.selectedEnglishVoice === modelData ? "#0E3352" : "#0E1A2B"
+                            radius: 5
+                            border.color: settingsDialog.selectedEnglishVoice === modelData ? "#38BDF8" : "#1E3352"
+                            border.width: 1
+                        }
+                        contentItem: Text {
+                            text: parent.text
+                            color: settingsDialog.selectedEnglishVoice === modelData ? "#E2F1FF" : "#8FA9C9"
+                            font.pixelSize: 11
+                            leftPadding: 8
+                            rightPadding: 8
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                Text { text: "Bangla: Piya (Local)"; color: "#57B894"; font.pixelSize: 11 }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 12
+                Text { text: "Rate " + settingsDialog.selectedTtsRate.toFixed(2); color: "#8FA9C9"; font.pixelSize: 11 }
+                Slider {
+                    from: 0.2
+                    to: 0.85
+                    value: settingsDialog.selectedTtsRate
+                    onMoved: settingsDialog.selectedTtsRate = value
+                    Layout.fillWidth: true
+                }
+                Text { text: "Vol " + Math.round(settingsDialog.selectedTtsVolume * 100) + "%"; color: "#8FA9C9"; font.pixelSize: 11 }
+                Slider {
+                    from: 0.0
+                    to: 1.0
+                    value: settingsDialog.selectedTtsVolume
+                    onMoved: settingsDialog.selectedTtsVolume = value
+                    Layout.fillWidth: true
+                }
+            }
+        }
+
+        // Local MLX LLM Selection
         ColumnLayout {
             Layout.fillWidth: true
             spacing: 6
             Text {
-                text: "Local MLX Model (Offline)"
+                text: "Local MLX LLM & Memory Profile"
                 color: "#DCEBFF"
                 font.pixelSize: 13
                 font.weight: Font.Medium
             }
-            GridLayout {
-                columns: 2
-                columnSpacing: 8
-                rowSpacing: 8
+            RowLayout {
                 Layout.fillWidth: true
+                spacing: 8
                 Repeater {
                     model: [
-                        { label: "Qwen 2.5 1.5B (Eco)", value: "qwen2.5-1.5b-4bit" },
-                        { label: "Qwen 3 1.7B (Eco)", value: "qwen3-1.7b-4bit" },
-                        { label: "Qwen 2.5 3B (Balanced)", value: "qwen2.5-3b-4bit" },
-                        { label: "Llama 3.2 3B (Balanced)", value: "llama-3.2-3b-4bit" }
+                        { label: "Qwen 2.5 1.5B (4-bit)", value: "qwen2.5-1.5b-4bit" },
+                        { label: "Qwen 3 1.7B (4-bit)", value: "qwen3-1.7b-4bit" }
                     ]
                     delegate: Button {
                         required property var modelData
@@ -220,29 +297,60 @@ Popup {
                     }
                 }
             }
-        }
-
-        Text {
-            Layout.fillWidth: true
-            text: "Privacy: Microphone, Camera & Screen Recording permissions are NOT requested in Phase 04."
-            color: "#57B894"
-            font.pixelSize: 11
-            wrapMode: Text.WordWrap
+            RowLayout {
+                spacing: 8
+                Repeater {
+                    model: [
+                        { label: "Eco (2200 MB)", value: "eco" },
+                        { label: "Balanced (3200 MB)", value: "balanced" }
+                    ]
+                    delegate: Button {
+                        required property var modelData
+                        text: modelData.label
+                        onClicked: settingsDialog.selectedProfile = modelData.value
+                        background: Rectangle {
+                            color: settingsDialog.selectedProfile === modelData.value ? "#0E3352" : "#0E1A2B"
+                            radius: 6
+                            border.color: settingsDialog.selectedProfile === modelData.value ? "#38BDF8" : "#1E3352"
+                            border.width: 1
+                        }
+                        contentItem: Text {
+                            text: parent.text
+                            color: settingsDialog.selectedProfile === modelData.value ? "#E2F1FF" : "#8FA9C9"
+                            font.pixelSize: 11
+                            leftPadding: 8
+                            rightPadding: 8
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                }
+            }
         }
 
         Item { Layout.fillHeight: true }
 
         RowLayout {
             Layout.fillWidth: true
-            Item { Layout.fillWidth: true }
+            Text {
+                text: "100% local processing. No cloud STT/TTS."
+                color: "#57B894"
+                font.pixelSize: 11
+                Layout.fillWidth: true
+            }
             Button {
                 text: "Save Local Config"
                 onClicked: {
-                    primeBridge.saveModelAndPreferences(
+                    primeBridge.saveAllPreferences(
                         settingsDialog.selectedLang,
                         settingsDialog.selectedProfile,
                         settingsDialog.clapChecked,
-                        settingsDialog.selectedModel
+                        settingsDialog.selectedModel,
+                        settingsDialog.selectedStt,
+                        settingsDialog.ttsChecked,
+                        settingsDialog.selectedEnglishVoice,
+                        settingsDialog.selectedTtsRate,
+                        settingsDialog.selectedTtsVolume
                     )
                     settingsDialog.close()
                 }

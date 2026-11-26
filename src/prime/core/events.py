@@ -15,6 +15,7 @@ class AssistantState(StrEnum):
     STARTING = "starting"
     IDLE = "idle"
     LISTENING = "listening"
+    TRANSCRIBING = "transcribing"
     THINKING = "thinking"
     SPEAKING = "speaking"
     SHUTTING_DOWN = "shutting_down"
