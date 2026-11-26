@@ -8,7 +8,7 @@
 
 ## Installation
 
-From `/Users/rafi/Documents/PROJECTS/AI DEVELOPMENT/PRIME/`:
+From the `PRIME/` repository root:
 
 ```bash
 uv sync --python 3.12 --group dev
