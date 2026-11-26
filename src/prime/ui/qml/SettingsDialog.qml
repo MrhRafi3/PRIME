@@ -8,7 +8,7 @@ Popup {
     focus: true
     anchors.centerIn: parent
     width: 460
-    height: 410
+    height: 490
     padding: 24
 
     background: Rectangle {
@@ -21,11 +21,13 @@ Popup {
     property string selectedLang: primeBridge.languageMode
     property string selectedProfile: primeBridge.memoryProfile
     property bool clapChecked: primeBridge.doubleClapEnabled
+    property string selectedModel: primeBridge.selectedModelSlug
 
     onOpened: {
         selectedLang = primeBridge.languageMode
         selectedProfile = primeBridge.memoryProfile
         clapChecked = primeBridge.doubleClapEnabled
+        selectedModel = primeBridge.selectedModelSlug
     }
 
     ColumnLayout {
@@ -173,9 +175,56 @@ Popup {
             }
         }
 
+        // Approved Local MLX Model Selection
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 6
+            Text {
+                text: "Local MLX Model (Offline)"
+                color: "#DCEBFF"
+                font.pixelSize: 13
+                font.weight: Font.Medium
+            }
+            GridLayout {
+                columns: 2
+                columnSpacing: 8
+                rowSpacing: 8
+                Layout.fillWidth: true
+                Repeater {
+                    model: [
+                        { label: "Qwen 2.5 1.5B (Eco)", value: "qwen2.5-1.5b-4bit" },
+                        { label: "Qwen 3 1.7B (Eco)", value: "qwen3-1.7b-4bit" },
+                        { label: "Qwen 2.5 3B (Balanced)", value: "qwen2.5-3b-4bit" },
+                        { label: "Llama 3.2 3B (Balanced)", value: "llama-3.2-3b-4bit" }
+                    ]
+                    delegate: Button {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData.label
+                        onClicked: settingsDialog.selectedModel = modelData.value
+                        background: Rectangle {
+                            color: settingsDialog.selectedModel === modelData.value ? "#0E3352" : "#0E1A2B"
+                            radius: 6
+                            border.color: settingsDialog.selectedModel === modelData.value ? "#38BDF8" : "#1E3352"
+                            border.width: 1
+                        }
+                        contentItem: Text {
+                            text: parent.text
+                            color: settingsDialog.selectedModel === modelData.value ? "#E2F1FF" : "#8FA9C9"
+                            font.pixelSize: 11
+                            leftPadding: 8
+                            rightPadding: 8
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                }
+            }
+        }
+
         Text {
             Layout.fillWidth: true
-            text: "Privacy: Microphone, Camera & Screen Recording permissions are NOT requested in Phase 03."
+            text: "Privacy: Microphone, Camera & Screen Recording permissions are NOT requested in Phase 04."
             color: "#57B894"
             font.pixelSize: 11
             wrapMode: Text.WordWrap
@@ -189,10 +238,11 @@ Popup {
             Button {
                 text: "Save Local Config"
                 onClicked: {
-                    primeBridge.savePreferences(
+                    primeBridge.saveModelAndPreferences(
                         settingsDialog.selectedLang,
                         settingsDialog.selectedProfile,
-                        settingsDialog.clapChecked
+                        settingsDialog.clapChecked,
+                        settingsDialog.selectedModel
                     )
                     settingsDialog.close()
                 }

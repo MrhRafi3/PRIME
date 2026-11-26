@@ -1,26 +1,30 @@
-"""Multi-turn prompt context builder grounded in SQLite MemoryStore."""
+"""Multi-turn prompt context builder grounded in SQLite MemoryStore and external prompt."""
 
 from __future__ import annotations
 
-from prime import APP_NAME
+from pathlib import Path
+
 from prime.config.settings import LanguageMode
 from prime.intelligence.memory.store import MemoryStore
+from prime.intelligence.prompts.loader import load_system_prompt
 from prime.intelligence.providers.base import ChatMessage
 
 
 class ContextAssembler:
-    """Assembles bounded system + history messages for future local inference."""
+    """Assembles bounded system + history messages for local MLX inference."""
 
     def __init__(
         self,
         memory_store: MemoryStore,
         *,
         language_mode: LanguageMode = LanguageMode.BANGLA_ENGLISH,
+        prompt_path: Path | None = None,
         max_history_messages: int = 10,
         max_chars_budget: int = 8000,
     ) -> None:
         self._memory = memory_store
         self._language_mode = language_mode
+        self._prompt_path = prompt_path
         self._max_history_messages = max_history_messages
         self._max_chars_budget = max_chars_budget
 
@@ -31,22 +35,13 @@ class ContextAssembler:
         *,
         query_hint: str | None = None,
     ) -> tuple[ChatMessage, ...]:
-        """Build bounded multi-turn messages including recalled notes and history."""
-        lang_instruction = (
-            "Respond naturally in Bangla or English matching the user's language."
-            if self._language_mode == LanguageMode.BANGLA_ENGLISH
-            else "Respond concisely in English."
-        )
-
+        """Build bounded multi-turn messages including external system prompt and notes."""
         notes = self._memory.search_memory(query_hint or user_input, limit=5)
-        notes_block = ""
-        if notes:
-            formatted = "; ".join(f"{n.key}: {n.content}" for n in notes)
-            notes_block = f"\nRelevant saved notes: {formatted}"
-
-        system_prompt = (
-            f"You are {APP_NAME}, a 100% local personal AI assistant running on macOS. "
-            f"{lang_instruction}{notes_block}"
+        formatted_notes = tuple(f"{n.key}: {n.content}" for n in notes)
+        system_prompt = load_system_prompt(
+            prompt_path=self._prompt_path,
+            language_mode=self._language_mode,
+            notes=formatted_notes,
         )
 
         history = self._memory.get_messages(conversation_id, limit=self._max_history_messages)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -17,8 +18,17 @@ from prime.config.settings import (
 )
 from prime.core.events import AssistantState, EventBus
 from prime.intelligence.context.assembler import ContextAssembler
+from prime.intelligence.generation.service import GenerationConfig
 from prime.intelligence.memory.store import MemoryStore
-from prime.intelligence.providers.base import LLMProvider
+from prime.intelligence.models.registry import ModelRegistry
+from prime.intelligence.providers.base import LLMProvider, StreamChunk
+from prime.intelligence.providers.mlx_provider import MLXProvider
+from prime.intelligence.runtime.manager import (
+    LocalAIRuntime,
+    RuntimeSnapshot,
+    RuntimeState,
+    default_budget_for_profile,
+)
 from prime.logging.logger import configure_logging, log_event
 from prime.plugins.contracts import PluginRegistry
 from prime.security.manager import SecurityManager
@@ -51,6 +61,10 @@ class TextSubmitResult:
     backend_connected: bool
     system_notice: str
     conversation_id: int | None = None
+    assistant_text: str = ""
+    tokens_generated: int = 0
+    tokens_per_sec: float = 0.0
+    cancelled: bool = False
 
 
 class PrimeApp:
@@ -62,6 +76,7 @@ class PrimeApp:
         *,
         confirmation_handler: ConfirmationHandler | None = None,
         llm_provider: LLMProvider | None = None,
+        model_registry: ModelRegistry | None = None,
         console_logging: bool = False,
         platform_override: str | None = None,
     ) -> None:
@@ -88,18 +103,59 @@ class PrimeApp:
             language_mode=config.ai.language_mode,
         )
         self.plugins = PluginRegistry(config.security)
-        self._llm_provider = llm_provider
+        self._model_registry = model_registry or ModelRegistry(config.storage.models_dir)
+        self._llm_provider: LLMProvider = llm_provider or MLXProvider()
+        self.runtime = LocalAIRuntime(
+            self._model_registry,
+            self._llm_provider,
+            generation_config=GenerationConfig(
+                memory_budget_mb=config.ai.memory_budget_mb,
+                max_context_tokens=config.ai.max_context_tokens,
+                max_generation_tokens=config.ai.max_generation_tokens,
+            ),
+            selected_model_slug=config.ai.selected_model_slug,
+            logger=self.logger.getChild("runtime"),
+        )
+        self.runtime.subscribe(
+            lambda snap: self.events.publish(
+                "ai.runtime_changed",
+                {
+                    "state": snap.state.value,
+                    "active_model": snap.active_model_name,
+                    "tps": snap.tokens_per_sec,
+                    "tokens": snap.last_token_count,
+                },
+            )
+        )
         self._active_conversation_id: int | None = None
         self._push_to_talk_pressed = False
         self._schema_version = 0
 
     @property
     def ai_backend_connected(self) -> bool:
-        return self._llm_provider is not None and self._llm_provider.is_loaded
+        return self.runtime.is_ready
+
+    @property
+    def model_registry(self) -> ModelRegistry:
+        return self._model_registry
 
     @property
     def active_conversation_id(self) -> int | None:
         return self._active_conversation_id
+
+    def get_runtime_snapshot(self) -> RuntimeSnapshot:
+        return self.runtime.snapshot()
+
+    def load_local_model(self, slug: str | None = None) -> RuntimeSnapshot:
+        if self.state == AssistantState.STOPPED:
+            raise RuntimeError("PrimeApp must be bootstrapped before loading a local model.")
+        return self.runtime.load_model(slug or self.config.ai.selected_model_slug)
+
+    def unload_local_model(self) -> RuntimeSnapshot:
+        return self.runtime.unload_model()
+
+    def cancel_generation(self) -> RuntimeSnapshot:
+        return self.runtime.cancel_generation()
 
     def get_activation_snapshot(self) -> ActivationSnapshot:
         ptt_status = (
@@ -148,8 +204,13 @@ class PrimeApp:
         )
         return snap
 
-    def submit_text_message(self, text: str) -> TextSubmitResult:
-        """Process a user text input honestly; never fabricate AI output when offline."""
+    def submit_text_message(
+        self,
+        text: str,
+        *,
+        on_token: Callable[[str, StreamChunk], None] | None = None,
+    ) -> TextSubmitResult:
+        """Process a user message locally; stream from MLX if loaded or report unavailability."""
         if self.state == AssistantState.STOPPED:
             raise RuntimeError("PrimeApp must be bootstrapped before submitting messages.")
 
@@ -167,6 +228,10 @@ class PrimeApp:
             conv = self.memory.create_conversation("Desktop Session")
             self._active_conversation_id = conv.id
 
+        # Assemble bounded multi-turn context BEFORE inserting the new user message
+        # so the current user prompt appears once at the end of the prompt sequence.
+        messages = self.context.build_messages(self._active_conversation_id, cleaned)
+
         self.memory.add_message(
             self._active_conversation_id,
             "user",
@@ -179,10 +244,17 @@ class PrimeApp:
         )
 
         if not self.ai_backend_connected:
-            notice = (
-                "Local AI engine is not connected in Phase 03. "
-                "Your message was saved locally; inference will be enabled in a later phase."
-            )
+            snap = self.runtime.snapshot()
+            if snap.state == RuntimeState.MODEL_AVAILABLE:
+                notice = (
+                    f"Model '{snap.active_model_name}' is available locally but not loaded yet. "
+                    "Click 'Load Model' to start local inference."
+                )
+            else:
+                notice = (
+                    "No local AI model is installed or loaded. "
+                    "Your message was saved locally; no response was fabricated."
+                )
             self._set_state(AssistantState.IDLE)
             self.events.publish("conversation.backend_unavailable", {"notice": notice})
             return TextSubmitResult(
@@ -193,13 +265,39 @@ class PrimeApp:
                 conversation_id=self._active_conversation_id,
             )
 
+        try:
+            response = self.runtime.generate_stream(messages, on_token=on_token)
+        except Exception as exc:
+            self._set_state(AssistantState.IDLE)
+            err_notice = f"Local generation failed: {exc}"
+            self.events.publish("conversation.generation_error", {"error": err_notice})
+            return TextSubmitResult(
+                accepted=True,
+                user_text=cleaned,
+                backend_connected=False,
+                system_notice=err_notice,
+                conversation_id=self._active_conversation_id,
+            )
+
+        if response.text and not response.cancelled:
+            self.memory.add_message(
+                self._active_conversation_id,
+                "assistant",
+                response.text,
+                language=self.config.ai.language_mode.value,
+            )
+
         self._set_state(AssistantState.IDLE)
         return TextSubmitResult(
             accepted=True,
             user_text=cleaned,
             backend_connected=True,
-            system_notice="",
+            system_notice="Generation cancelled." if response.cancelled else "",
             conversation_id=self._active_conversation_id,
+            assistant_text=response.text,
+            tokens_generated=response.tokens_generated,
+            tokens_per_sec=response.tokens_per_sec,
+            cancelled=response.cancelled,
         )
 
     def update_settings(
@@ -208,9 +306,10 @@ class PrimeApp:
         double_clap_enabled: bool | None = None,
         language_mode: LanguageMode | None = None,
         memory_profile: MemoryProfile | None = None,
+        selected_model_slug: str | None = None,
         persist: bool = True,
     ) -> PrimeConfig:
-        """Update supported Phase 03 settings safely and optionally persist to config.toml."""
+        """Update supported settings safely and optionally persist to config.toml."""
         new_activation = self.config.activation
         if double_clap_enabled is not None:
             new_activation = ActivationConfig(
@@ -224,19 +323,34 @@ class PrimeApp:
             )
 
         new_ai = self.config.ai
-        if language_mode is not None or memory_profile is not None:
+        if (
+            language_mode is not None
+            or memory_profile is not None
+            or selected_model_slug is not None
+        ):
             new_profile = memory_profile or self.config.ai.memory_profile
             ctx_by_profile = {
                 MemoryProfile.ECO: 2048,
                 MemoryProfile.BALANCED: 4096,
                 MemoryProfile.HEAVY: 2048,
             }
+            new_budget = default_budget_for_profile(new_profile)
+            new_slug = selected_model_slug or self.config.ai.selected_model_slug
+            self._model_registry.get_spec(new_slug)
             new_ai = HardwareAIConfig(
                 memory_profile=new_profile,
                 language_mode=language_mode or self.config.ai.language_mode,
                 local_only=True,
                 max_context_tokens=ctx_by_profile[new_profile],
                 idle_unload_seconds=self.config.ai.idle_unload_seconds,
+                selected_model_slug=new_slug,
+                memory_budget_mb=new_budget,
+                max_generation_tokens=self.config.ai.max_generation_tokens,
+                auto_load_model=self.config.ai.auto_load_model,
+            )
+            self.runtime.select_model(new_slug)
+            self.runtime.update_memory_budget(
+                new_budget, new_ai.max_context_tokens, new_ai.max_generation_tokens
             )
 
         self.config = replace(self.config, activation=new_activation, ai=new_ai)
@@ -304,6 +418,7 @@ class PrimeApp:
         if self.state == AssistantState.STOPPED:
             return
         self._set_state(AssistantState.SHUTTING_DOWN)
+        self.runtime.unload_model()
         self.plugins.unregister_all()
         self.memory.close()
         log_event(

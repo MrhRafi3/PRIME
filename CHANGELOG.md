@@ -2,6 +2,16 @@
 
 All notable changes to PRIME will be documented in this file.
 
+## [0.3.0-phase04] - 2026-11-26 (Phase 04 — Local AI Intelligence Engine)
+
+### Added
+- `mlx-lm` (`0.32.2`) / `mlx` (`0.32.5`) Apple Silicon local inference engine (`MLXProvider`) with `HF_HUB_OFFLINE=1` enforcement, token streaming, cancellation, and explicit Metal cache unloading.
+- Approved local model catalog & sandboxed directory validator (`prime.intelligence.models.ModelRegistry`).
+- External configurable Bangla/English/Banglish system prompt (`src/prime/intelligence/prompts/system_prompt.md`).
+- Memory-budgeted `GenerationService` and 8-state `LocalAIRuntime` (`Model Not Installed` through `Error`).
+- Background `InferenceWorker` in `PrimeUIBridge`, live token streaming in `Main.qml`, `Load Model` / `Unload` / `Stop` controls, `tok/s` & token telemetry, and model selection in `SettingsDialog.qml`.
+- Offline intelligence unit/integration tests (`tests/unit/test_intelligence_engine.py`), benchmark script (`scripts/benchmark_models.py`), and Phase 04 reports & screenshots (`phase-04-reports/`).
+
 ## [0.2.0-phase03] - 2026-11-26 (Phase 03 — JARVIS Desktop UI)
 
 ### Added

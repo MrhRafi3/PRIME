@@ -22,6 +22,7 @@ classifiers = [
 ]
 # Phase 02 uses Python 3.12 standard library exclusively for runtime code.
 dependencies = [
+    "mlx-lm>=0.20",
     "pyside6-essentials>=6.8,<6.11",
 ]
 

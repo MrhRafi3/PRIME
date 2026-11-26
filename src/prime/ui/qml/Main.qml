@@ -201,23 +201,91 @@ Window {
                             aiConnected: primeBridge.aiBackendConnected
                         }
 
+                        // Runtime status + Model Load/Unload bar
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 34
+                            Layout.preferredHeight: 62
                             radius: 8
                             color: "#0E1B2F"
-                            border.color: "#1B3354"
+                            border.color: primeBridge.runtimeStateText === "Error" ? "#7F1D1D" : "#1B3354"
                             border.width: 1
 
-                            Text {
-                                anchors.centerIn: parent
-                                text: primeBridge.aiBackendConnected
-                                      ? "LOCAL AI ENGINE: CONNECTED"
-                                      : "AI ENGINE: NOT CONNECTED (PHASE 03)"
-                                color: primeBridge.aiBackendConnected ? "#34D399" : "#F59E0B"
-                                font.pixelSize: 11
-                                font.weight: Font.Medium
-                                font.letterSpacing: 1.1
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 8
+                                spacing: 4
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    Text {
+                                        text: primeBridge.aiBackendConnected
+                                              ? ("AI: " + primeBridge.runtimeStateText.toUpperCase())
+                                              : ("AI ENGINE: " + primeBridge.runtimeStateText.toUpperCase())
+                                        color: {
+                                            if (primeBridge.runtimeStateText === "Error") return "#F87171"
+                                            if (primeBridge.aiBackendConnected) return "#34D399"
+                                            if (primeBridge.isModelAvailable) return "#38BDF8"
+                                            return "#F59E0B"
+                                        }
+                                        font.pixelSize: 10
+                                        font.weight: Font.DemiBold
+                                        font.letterSpacing: 1.0
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Text {
+                                        text: primeBridge.tokensPerSecText + " • " + primeBridge.lastTokenCount + " tok"
+                                        color: "#8FA9C9"
+                                        font.pixelSize: 10
+                                        font.family: "Menlo"
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    Text {
+                                        text: "Model: " + primeBridge.activeModelName
+                                        color: "#CBE4FF"
+                                        font.pixelSize: 11
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Button {
+                                        Layout.preferredHeight: 24
+                                        text: primeBridge.aiBackendConnected ? "Unload" : "Load Model"
+                                        enabled: primeBridge.aiBackendConnected || primeBridge.isModelAvailable
+                                        onClicked: {
+                                            if (primeBridge.aiBackendConnected) {
+                                                primeBridge.unloadModel()
+                                            } else {
+                                                primeBridge.loadModel()
+                                            }
+                                        }
+                                        background: Rectangle {
+                                            color: parent.enabled
+                                                   ? (parent.hovered ? "#153254" : "#102540")
+                                                   : "#0A1424"
+                                            radius: 5
+                                            border.color: parent.enabled ? "#2B568A" : "#162A44"
+                                            border.width: 1
+                                        }
+                                        contentItem: Text {
+                                            text: parent.text
+                                            color: parent.enabled ? "#E2F1FF" : "#4E6888"
+                                            font.pixelSize: 10
+                                            font.weight: Font.Medium
+                                            leftPadding: 8
+                                            rightPadding: 8
+                                            horizontalAlignment: Text.AlignHCenter
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -442,7 +510,7 @@ Window {
                         }
                     }
 
-                    // Explicit offline/unavailable banner when AI engine is not connected
+                    // Explicit offline/unavailable banner when AI engine is not loaded
                     Rectangle {
                         Layout.fillWidth: true
                         visible: !primeBridge.aiBackendConnected
@@ -456,7 +524,9 @@ Window {
                             id: offlineNoticeText
                             anchors.fill: parent
                             anchors.margins: 9
-                            text: "Local AI inference engine is not connected in Phase 03. Submitted messages are recorded locally in SQLite without generating fabricated replies."
+                            text: primeBridge.isModelAvailable
+                                  ? ("Local model '" + primeBridge.activeModelName + "' is installed. Click 'Load Model' to enable offline MLX inference.")
+                                  : "No local MLX model is installed yet. Submitted messages are saved locally in SQLite without fabricating AI replies."
                             color: "#FCD34D"
                             font.pixelSize: 12
                             wrapMode: Text.WordWrap
@@ -588,18 +658,26 @@ Window {
                             id: sendBtn
                             Layout.preferredHeight: 42
                             Layout.preferredWidth: 96
-                            text: "Send"
-                            enabled: promptInput.text.trim().length > 0
+                            text: primeBridge.isGenerating ? "Stop" : "Send"
+                            enabled: primeBridge.isGenerating || promptInput.text.trim().length > 0
                             onClicked: {
-                                primeBridge.sendMessage(promptInput.text)
-                                promptInput.text = ""
+                                if (primeBridge.isGenerating) {
+                                    primeBridge.cancelGeneration()
+                                } else {
+                                    primeBridge.sendMessage(promptInput.text)
+                                    promptInput.text = ""
+                                }
                             }
                             background: Rectangle {
-                                color: sendBtn.enabled
-                                       ? (sendBtn.hovered ? "#0284C7" : "#0369A1")
-                                       : "#0E1A2B"
+                                color: primeBridge.isGenerating
+                                       ? "#991B1B"
+                                       : (sendBtn.enabled
+                                          ? (sendBtn.hovered ? "#0284C7" : "#0369A1")
+                                          : "#0E1A2B")
                                 radius: 9
-                                border.color: sendBtn.enabled ? "#38BDF8" : "#182D49"
+                                border.color: primeBridge.isGenerating
+                                              ? "#F87171"
+                                              : (sendBtn.enabled ? "#38BDF8" : "#182D49")
                                 border.width: 1
                             }
                             contentItem: Text {

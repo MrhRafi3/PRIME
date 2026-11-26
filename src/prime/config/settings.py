@@ -106,10 +106,15 @@ class StorageConfig:
     log_dir: Path = field(default_factory=_default_log_dir)
     config_path: Path = field(default_factory=lambda: _default_app_support_dir() / "config.toml")
     db_filename: str = "prime_memory.db"
+    models_dir_override: Path | None = None
 
     @property
     def db_path(self) -> Path:
         return self.data_dir / self.db_filename
+
+    @property
+    def models_dir(self) -> Path:
+        return self.models_dir_override or (self.data_dir / "models")
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +162,10 @@ class HardwareAIConfig:
     local_only: bool = True
     max_context_tokens: int = 4096
     idle_unload_seconds: int = 300
+    selected_model_slug: str = "qwen2.5-1.5b-4bit"
+    memory_budget_mb: int = 3200
+    max_generation_tokens: int = 512
+    auto_load_model: bool = False
 
     def __post_init__(self) -> None:
         if not self.local_only:
@@ -165,6 +174,10 @@ class HardwareAIConfig:
             raise ConfigError("max_context_tokens must be between 512 and 8192 for M1 8GB safety.")
         if self.idle_unload_seconds < 30:
             raise ConfigError("idle_unload_seconds must be >= 30")
+        if self.memory_budget_mb < 512 or self.memory_budget_mb > 6144:
+            raise ConfigError("memory_budget_mb must be between 512 and 6144 for M1 8GB safety.")
+        if self.max_generation_tokens < 32 or self.max_generation_tokens > 2048:
+            raise ConfigError("max_generation_tokens must be between 32 and 2048.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +221,7 @@ class PrimeConfig:
                 "log_dir": str(self.storage.log_dir),
                 "config_path": str(self.storage.config_path),
                 "db_filename": self.storage.db_filename,
+                "models_dir": str(self.storage.models_dir),
             },
             "logging": {
                 "level": self.logging.level,
@@ -228,6 +242,10 @@ class PrimeConfig:
                 "local_only": self.ai.local_only,
                 "max_context_tokens": self.ai.max_context_tokens,
                 "idle_unload_seconds": self.ai.idle_unload_seconds,
+                "selected_model_slug": self.ai.selected_model_slug,
+                "memory_budget_mb": self.ai.memory_budget_mb,
+                "max_generation_tokens": self.ai.max_generation_tokens,
+                "auto_load_model": self.ai.auto_load_model,
             },
             "security": {
                 "require_tier2_confirmation": self.security.require_tier2_confirmation,
@@ -298,11 +316,19 @@ def load_config(
     db_filename = str(storage_sec.get("db_filename", "prime_memory.db")).strip()
     if not db_filename or "/" in db_filename or "\\" in db_filename or ".." in db_filename:
         raise ConfigError(f"Invalid db_filename: {db_filename!r}")
+    models_dir_override = (
+        Path(environ["PRIME_MODELS_DIR"]).expanduser()
+        if environ.get("PRIME_MODELS_DIR")
+        else (
+            Path(storage_sec["models_dir"]).expanduser() if storage_sec.get("models_dir") else None
+        )
+    )
     storage = StorageConfig(
         data_dir=data_dir,
         log_dir=log_dir,
         config_path=resolved_config_path or (data_dir / "config.toml"),
         db_filename=db_filename,
+        models_dir_override=models_dir_override,
     )
 
     log_sec = _merge_section(file_data, "logging")
@@ -357,6 +383,11 @@ def load_config(
         raise ConfigError(f"Invalid language mode: {lang_raw!r}") from exc
 
     default_ctx = _PROFILE_CTX_DEFAULTS[profile]
+    budget_defaults = {
+        MemoryProfile.ECO: 2200,
+        MemoryProfile.BALANCED: 3200,
+        MemoryProfile.HEAVY: 5200,
+    }
     ai_cfg = HardwareAIConfig(
         memory_profile=profile,
         language_mode=language,
@@ -367,6 +398,18 @@ def load_config(
         idle_unload_seconds=_parse_int(
             ai_sec.get("idle_unload_seconds", 300), "ai.idle_unload_seconds", 30
         ),
+        selected_model_slug=str(
+            environ.get("PRIME_MODEL_SLUG")
+            or ai_sec.get("selected_model_slug")
+            or "qwen2.5-1.5b-4bit"
+        ).strip(),
+        memory_budget_mb=_parse_int(
+            ai_sec.get("memory_budget_mb", budget_defaults[profile]), "ai.memory_budget_mb", 512
+        ),
+        max_generation_tokens=_parse_int(
+            ai_sec.get("max_generation_tokens", 512), "ai.max_generation_tokens", 32
+        ),
+        auto_load_model=_parse_bool(ai_sec.get("auto_load_model", False), "ai.auto_load_model"),
     )
 
     sec_sec = _merge_section(file_data, "security")
@@ -453,6 +496,10 @@ def save_config_toml(config: PrimeConfig, path: Path | None = None) -> Path:
         "local_only = true",
         f"max_context_tokens = {config.ai.max_context_tokens}",
         f"idle_unload_seconds = {config.ai.idle_unload_seconds}",
+        f"selected_model_slug = {_toml_quote(config.ai.selected_model_slug)}",
+        f"memory_budget_mb = {config.ai.memory_budget_mb}",
+        f"max_generation_tokens = {config.ai.max_generation_tokens}",
+        f"auto_load_model = {'true' if config.ai.auto_load_model else 'false'}",
         "",
         "[security]",
         "require_tier2_confirmation = true",
