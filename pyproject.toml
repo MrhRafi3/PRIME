@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "prime"
+version = "0.1.0"
+description = "PRIME — Local-first personal AI assistant foundation for macOS (Apple Silicon)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12,<3.13"
+authors = [
+    { name = "MrhRafi3" },
+]
+keywords = ["ai-assistant", "local-ai", "macos", "apple-silicon", "privacy"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3.12",
+]
+# Phase 02 uses Python 3.12 standard library exclusively for runtime code.
+dependencies = []
+
+[project.scripts]
+prime = "prime.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0,<9.0.0",
+    "ruff>=0.8.0,<1.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/prime"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra --strict-markers"
+markers = [
+    "unit: fast isolated unit tests",
+    "integration: multi-module integration tests",
+    "security: security, permission, and input validation tests",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "B",
+    "UP",
+    "S",
+    "SIM",
+    "RUF",
+]
+ignore = [
+    "S101",  # assert allowed in tests (per-file-ignores also below)
+    "S603",  # subprocess calls are strictly allowlisted with shell=False
+    "S607",  # macOS system binaries resolved from trusted OS paths / validated
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S105", "S106", "S108"]
