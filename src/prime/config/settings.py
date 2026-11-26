@@ -408,3 +408,64 @@ def load_config(
         ai=ai_cfg,
         security=security,
     )
+
+
+def _toml_quote(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def save_config_toml(config: PrimeConfig, path: Path | None = None) -> Path:
+    """Persist non-sensitive PRIME configuration atomically to TOML (0700/0600)."""
+    target = (path or config.storage.config_path).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(target.parent, 0o700)
+
+    allowed_apps = ", ".join(_toml_quote(a) for a in config.security.allowed_apps)
+    allowed_schemes = ", ".join(_toml_quote(s) for s in config.security.allowed_url_schemes)
+    lines = [
+        f"environment = {_toml_quote(config.environment.value)}",
+        "",
+        "[storage]",
+        f"data_dir = {_toml_quote(str(config.storage.data_dir))}",
+        f"log_dir = {_toml_quote(str(config.storage.log_dir))}",
+        f"db_filename = {_toml_quote(config.storage.db_filename)}",
+        "",
+        "[logging]",
+        f"level = {_toml_quote(config.logging.level)}",
+        f"max_bytes = {config.logging.max_bytes}",
+        f"backup_count = {config.logging.backup_count}",
+        f"log_private_content = {'true' if config.logging.log_private_content else 'false'}",
+        f"json_format = {'true' if config.logging.json_format else 'false'}",
+        "",
+        "[activation]",
+        f"push_to_talk_enabled = {'true' if config.activation.push_to_talk_enabled else 'false'}",
+        f"double_clap_enabled = {'true' if config.activation.double_clap_enabled else 'false'}",
+        "wake_word_enabled = false",
+        "background_mic_enabled = false",
+        f"clap_threshold = {config.activation.clap_threshold}",
+        f"clap_min_interval_s = {config.activation.clap_min_interval_s}",
+        f"clap_max_interval_s = {config.activation.clap_max_interval_s}",
+        "",
+        "[ai]",
+        f"memory_profile = {_toml_quote(config.ai.memory_profile.value)}",
+        f"language_mode = {_toml_quote(config.ai.language_mode.value)}",
+        "local_only = true",
+        f"max_context_tokens = {config.ai.max_context_tokens}",
+        f"idle_unload_seconds = {config.ai.idle_unload_seconds}",
+        "",
+        "[security]",
+        "require_tier2_confirmation = true",
+        f"sandbox_root = {_toml_quote(str(config.security.sandbox_root))}",
+        f"allowed_apps = [{allowed_apps}]",
+        f"allowed_url_schemes = [{allowed_schemes}]",
+        f"allow_network_plugins = {'true' if config.security.allow_network_plugins else 'false'}",
+        "allow_arbitrary_shell = false",
+        "",
+    ]
+    tmp_path = target.with_suffix(".toml.tmp")
+    tmp_path.write_text("\n".join(lines), encoding="utf-8")
+    os.chmod(tmp_path, 0o600)
+    tmp_path.replace(target)
+    os.chmod(target, 0o600)
+    return target

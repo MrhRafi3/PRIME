@@ -30,6 +30,19 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="Initialize foundation modules and print runtime status.")
     sub.add_parser("config", help="Print validated sanitized configuration as JSON.")
     sub.add_parser("doctor", help="Run non-invasive environment and hardware readiness checks.")
+    ui_parser = sub.add_parser("ui", help="Launch the PRIME JARVIS desktop interface.")
+    ui_parser.add_argument(
+        "--auto-close-ms",
+        type=int,
+        default=0,
+        help="Automatically close the desktop window after N milliseconds (for smoke tests).",
+    )
+    ui_parser.add_argument(
+        "--screenshot-path",
+        type=Path,
+        default=None,
+        help="Optional PNG file path to save a rendered window capture before exiting.",
+    )
     return parser
 
 
@@ -46,6 +59,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "config":
         print(json.dumps(config.to_safe_dict(), indent=2))
         return 0
+
+    if args.command == "ui":
+        from prime.ui.app import launch_ui
+
+        return launch_ui(
+            config,
+            auto_close_ms=args.auto_close_ms,
+            screenshot_path=args.screenshot_path,
+        )
 
     app = PrimeApp(config)
     try:

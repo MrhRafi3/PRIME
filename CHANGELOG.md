@@ -2,6 +2,16 @@
 
 All notable changes to PRIME will be documented in this file.
 
+## [0.2.0-phase03] - 2026-11-26 (Phase 03 — JARVIS Desktop UI)
+
+### Added
+- PySide6 (`PySide6-Essentials 6.10.3`) Qt Quick/QML JARVIS desktop interface (`src/prime/ui/`).
+- `PrimeUIBridge`, `MessageListModel`, and background `QThread` `MetricsWorker` keeping all OS telemetry off the UI thread.
+- Six-region HUD (`Main.qml`, `JarvisHud.qml`, `SettingsDialog.qml`): Header, animated central HUD, Conversation panel with truthful offline notice, Activation controls (Push-to-Talk UI state + Double-Clap config), System Telemetry (CPU, Unified Memory, Battery), and Local-Only Footer.
+- `MacOSSystemController.get_system_metrics()` (`ps`, `sysctl`, `vm_stat`, `pmset`) with graceful `None` fallbacks.
+- `save_config_toml()` atomic `0700`/`0600` persistence and `prime ui` CLI launch command.
+- UI integration tests (`tests/ui/test_ui_bridge.py`), metrics/persistence unit tests (`tests/unit/test_metrics.py`), and Phase 03 reports (`phase-03-reports/`).
+
 ## [0.1.0] - 2026-11-26 (Phase 02 — Core Foundation)
 
 ### Added

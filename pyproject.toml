@@ -21,7 +21,9 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 # Phase 02 uses Python 3.12 standard library exclusively for runtime code.
-dependencies = []
+dependencies = [
+    "pyside6-essentials>=6.8,<6.11",
+]
 
 [project.scripts]
 prime = "prime.main:main"
@@ -43,6 +45,7 @@ markers = [
     "unit: fast isolated unit tests",
     "integration: multi-module integration tests",
     "security: security, permission, and input validation tests",
+    "ui: PySide6 and QML desktop UI tests",
 ]
 
 [tool.ruff]

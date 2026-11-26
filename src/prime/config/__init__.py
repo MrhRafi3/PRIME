@@ -14,6 +14,7 @@ from prime.config.settings import (
     SecurityConfig,
     StorageConfig,
     load_config,
+    save_config_toml,
 )
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "SecurityConfig",
     "StorageConfig",
     "load_config",
+    "save_config_toml",
 ]

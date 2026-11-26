@@ -11,6 +11,25 @@ class VoicePipelineError(RuntimeError):
     """Raised when an unconfigured or disallowed voice operation is invoked."""
 
 
+class ActivationStatus(StrEnum):
+    """Availability status for activation triggers without hardware access."""
+
+    CONFIGURED_UNAVAILABLE = "configured_unavailable"
+    DISABLED = "disabled"
+    ACTIVE = "active"
+
+
+@dataclass(frozen=True, slots=True)
+class ActivationSnapshot:
+    """UI-facing state for push-to-talk and double-clap configuration."""
+
+    push_to_talk_pressed: bool
+    push_to_talk_status: ActivationStatus
+    double_clap_enabled: bool
+    double_clap_status: ActivationStatus
+    microphone_permission_requested: bool = False
+
+
 class SpeechLanguage(StrEnum):
     BANGLA = "bn"
     ENGLISH = "en"

@@ -48,6 +48,16 @@ class VolumeStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class SystemMetrics:
+    cpu_percent: float | None
+    memory_used_gb: float | None
+    memory_total_gb: float | None
+    memory_percent: float | None
+    battery_percent: int | None
+    battery_charging: bool | None
+
+
+@dataclass(frozen=True, slots=True)
 class FolderOperationResult:
     path: Path
     created: bool
@@ -72,6 +82,10 @@ class SystemController(PermissionChecker, ABC):
     @abstractmethod
     def get_battery_status(self) -> BatteryStatus:
         """Return power/battery state (Tier 0)."""
+
+    @abstractmethod
+    def get_system_metrics(self) -> SystemMetrics:
+        """Return lightweight CPU, memory, and battery telemetry (Tier 0)."""
 
     @abstractmethod
     def get_volume(self) -> VolumeStatus:

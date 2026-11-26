@@ -7,6 +7,7 @@ from prime.system.base import (
     PlatformKind,
     SystemController,
     SystemInfo,
+    SystemMetrics,
     UnsupportedPlatformError,
     VolumeStatus,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "PlatformKind",
     "SystemController",
     "SystemInfo",
+    "SystemMetrics",
     "UnsupportedPlatformError",
     "VolumeStatus",
     "create_system_controller",

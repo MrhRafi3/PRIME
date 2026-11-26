@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import re
 import subprocess
@@ -20,6 +21,7 @@ from prime.system.base import (
     PlatformKind,
     SystemController,
     SystemInfo,
+    SystemMetrics,
     VolumeStatus,
 )
 
@@ -27,6 +29,8 @@ CommandRunner = Callable[[Sequence[str], float], subprocess.CompletedProcess[str
 
 _PMSET_PCT_RE = re.compile(r"(\d{1,3})%")
 _VOL_SETTINGS_RE = re.compile(r"output volume:(\d+).*?output muted:(true|false)")
+_VM_PAGE_SIZE_RE = re.compile(r"page size of (\d+) bytes")
+_VM_STAT_LINE_RE = re.compile(r"^([^:]+):\s+(\d+)\.$")
 
 
 def _default_runner(args: Sequence[str], timeout: float) -> subprocess.CompletedProcess[str]:
@@ -136,6 +140,83 @@ class MacOSSystemController(SystemController):
         else:
             source = "Unknown"
         return BatteryStatus(percent=percent, is_charging=charging, raw_source=source)
+
+    def get_system_metrics(self) -> SystemMetrics:
+        """Collect lightweight CPU, memory, and battery metrics without blocking UI."""
+        self._security.authorize(
+            ActionRequest(
+                "get_system_metrics", RiskTier.TIER_0_READ_ONLY, PermissionScope.SYSTEM_READ
+            )
+        )
+        cpu_pct = self._read_cpu_percent()
+        mem_used_gb, mem_total_gb, mem_pct = self._read_memory_usage()
+        batt_pct: int | None = None
+        batt_charging: bool | None = None
+        try:
+            batt = self.get_battery_status()
+            batt_pct = batt.percent
+            batt_charging = batt.is_charging
+        except PlatformCommandError:
+            pass
+        return SystemMetrics(
+            cpu_percent=cpu_pct,
+            memory_used_gb=mem_used_gb,
+            memory_total_gb=mem_total_gb,
+            memory_percent=mem_pct,
+            battery_percent=batt_pct,
+            battery_charging=batt_charging,
+        )
+
+    def _read_cpu_percent(self) -> float | None:
+        try:
+            out = self._run_allowlisted(["/bin/ps", "-A", "-o", "%cpu"], timeout=2.0)
+        except PlatformCommandError:
+            return None
+        total = 0.0
+        for line in out.splitlines()[1:]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                total += float(stripped)
+            except ValueError:
+                continue
+        cores = max(1, os.cpu_count() or 1)
+        return round(max(0.0, min(100.0, total / cores)), 1)
+
+    def _read_memory_usage(self) -> tuple[float | None, float | None, float | None]:
+        try:
+            total_raw = self._run_allowlisted(["/usr/sbin/sysctl", "-n", "hw.memsize"], timeout=2.0)
+            total_bytes = int(total_raw)
+            vm_out = self._run_allowlisted(["/usr/bin/vm_stat"], timeout=2.0)
+        except (PlatformCommandError, ValueError):
+            return None, None, None
+
+        if total_bytes <= 0:
+            return None, None, None
+
+        page_match = _VM_PAGE_SIZE_RE.search(vm_out)
+        page_size = int(page_match.group(1)) if page_match else 16384
+        pages: dict[str, int] = {}
+        for line in vm_out.splitlines():
+            m = _VM_STAT_LINE_RE.match(line.strip())
+            if m:
+                pages[m.group(1).strip()] = int(m.group(2))
+
+        used_pages = (
+            pages.get("Pages active", 0)
+            + pages.get("Pages wired down", 0)
+            + pages.get("Pages occupied by compressor", 0)
+        )
+        if used_pages <= 0:
+            return None, None, None
+
+        used_bytes = min(total_bytes, used_pages * page_size)
+        gib = 1024**3
+        used_gb = round(used_bytes / gib, 2)
+        total_gb = round(total_bytes / gib, 2)
+        pct = round((used_bytes / total_bytes) * 100.0, 1)
+        return used_gb, total_gb, pct
 
     def get_volume(self) -> VolumeStatus:
         self._security.authorize(

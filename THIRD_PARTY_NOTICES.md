@@ -40,10 +40,10 @@ SOFTWARE.
 
 ---
 
-## 3. Third-Party Packages (Phase 02)
+## 3. Third-Party Packages
 
-### Runtime Dependencies
-- **None.** Phase 02 core infrastructure depends strictly on the Python 3.12 standard library (PSF License v2).
+### Runtime Dependencies (Phase 03)
+- **PySide6-Essentials** (`6.10.3`) & **shiboken6** (`6.10.3`) — **GNU Lesser General Public License v3 (LGPLv3)** (`Copyright (C) The Qt Company Ltd.`). Used via dynamic linking; distributed bundles must preserve LGPLv3 notices and allow end-users to replace Qt shared libraries.
 
 ### Development & Verification Dependencies
 - **pytest** (`>=8.3.0,<9.0.0`) — MIT License (`Copyright (c) 2004 Holger Krekel and others`)
@@ -51,7 +51,7 @@ SOFTWARE.
 
 ---
 
-## 4. Planned Future License Obligations (Phase 03+)
+## 4. Planned Future License Obligations (Phase 04+)
 
 When UI and AI dependencies are introduced in later phases, the following compliance requirements apply:
 - **PySide6 / Qt 6 (LGPLv3):** Must remain dynamically linked when distributed; packaged `.app` bundles must include the LGPLv3 notice and allow users to swap Qt shared libraries.
